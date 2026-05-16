@@ -1,0 +1,30 @@
+{
+  "name": "websocket-debugger-tool",
+  "version": "0.1.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc --noEmit && vite build",
+    "test": "vitest run",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "dev": "vite --host 127.0.0.1",
+    "package:extension": "npm run build && mkdir -p release && cd dist && zip -qr ../release/websocket-workbench-$npm_package_version.zip ."
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "^4.2.1",
+    "vite": "^5.2.0",
+    "typescript": "^5.4.5",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "lucide-react": "^0.468.0"
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "^6.4.2",
+    "@testing-library/react": "^14.2.1",
+    "@types/chrome": "^0.0.268",
+    "@types/react": "^18.2.66",
+    "@types/react-dom": "^18.2.22",
+    "jsdom": "^24.0.0",
+    "vitest": "^1.4.0"
+  }
+}

@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=440, initial-scale=1" />
+    <title>WebSocket Workbench Small Promo</title>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        width: 440px;
+        height: 280px;
+        margin: 0;
+        overflow: hidden;
+        background: #0d1117;
+        color: #f8fafc;
+        font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+
+      .tile {
+        position: relative;
+        width: 440px;
+        height: 280px;
+        padding: 24px;
+        background:
+          radial-gradient(circle at 78% 12%, rgba(56, 189, 248, 0.26), transparent 32%),
+          linear-gradient(135deg, #0d1117 0%, #111827 48%, #07221f 100%);
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+
+      .brand img {
+        width: 48px;
+        height: 48px;
+      }
+
+      .brand span {
+        display: block;
+        color: #7dd3fc;
+        font-size: 12px;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      h1 {
+        margin: 24px 0 10px;
+        max-width: 240px;
+        font-size: 30px;
+        line-height: 1.02;
+        letter-spacing: 0;
+      }
+
+      p {
+        margin: 0;
+        max-width: 230px;
+        color: #cbd5e1;
+        font-size: 13px;
+        line-height: 1.42;
+      }
+
+      .screen {
+        position: absolute;
+        right: -76px;
+        bottom: -30px;
+        width: 274px;
+        height: 172px;
+        border: 1px solid rgba(148, 163, 184, 0.3);
+        border-radius: 14px;
+        overflow: hidden;
+        transform: rotate(-5deg);
+        box-shadow: 0 30px 90px rgba(0, 0, 0, 0.5);
+        background: #0f172a;
+      }
+
+      .screen img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        object-position: left top;
+      }
+
+    </style>
+  </head>
+  <body>
+    <main class="tile" aria-label="WebSocket Workbench promotional tile">
+      <div class="brand">
+        <img src="../store-icon-128.png" alt="" />
+        <div>
+          <span>Chrome Extension</span>
+          <strong>WebSocket Workbench</strong>
+        </div>
+      </div>
+      <h1>Inspect WebSocket traffic safely.</h1>
+      <p>Capture frames, replay text messages, and export redacted evidence for authorized debugging.</p>
+      <div class="screen" aria-hidden="true">
+        <img src="../screenshots/01-debugger-binary-inspector-1280x800.png" alt="" />
+      </div>
+    </main>
+  </body>
+</html>
