@@ -1,0 +1,1 @@
+import"./modulepreload-polyfill.js";import{a as e,j as t,R as o}from"./picture-in-picture-2.js";import{A as r}from"./App.js";import{s,g as a}from"./chromeAdapter.js";/* empty css      */import"./discovery.js";e(document.getElementById("root")).render(t.jsx(o.StrictMode,{children:t.jsx(r,{surface:"sidepanel",loadTabContext:a,subscribeTabContext:s})}));

@@ -1,0 +1,1 @@
+import"./modulepreload-polyfill.js";import{a as o,j as t,R as e}from"./picture-in-picture-2.js";import{A as r}from"./App.js";import{b as a}from"./chromeAdapter.js";/* empty css      */import"./discovery.js";o(document.getElementById("root")).render(t.jsx(e.StrictMode,{children:t.jsx(r,{surface:"devtools",loadTabContext:async()=>a()})}));
