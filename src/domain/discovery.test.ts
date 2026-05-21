@@ -1,6 +1,10 @@
 import {
   createConnectionRecipe,
   createObservedFrameSummary,
+  handshakeHeaderUsage,
+  observedHandshakeExtensions,
+  observedHandshakeHeader,
+  observedHandshakeSubprotocol,
   parseWebSocketCdpEvent,
   redactHandshakeHeaders,
   reduceDiscoveredSockets,
@@ -36,8 +40,37 @@ describe('WebSocket discovery domain', () => {
     expect(sockets[0].requestId).toBe('100.1');
     expect(sockets[0].url).toBe('wss://app.example/ws');
     expect(sockets[0].frameCounts.outbound).toBe(1);
+    expect(sockets[0].bootstrapTranscript.map((frame) => frame.direction)).toEqual(['outbound']);
     expect(sockets[0].firstOutboundFrames[0].preview).toBe('{"subscribe":"orders"}');
     expect(sockets[0].lifecycle).toBe('closed');
+  });
+
+  it('keeps inbound and outbound bootstrap transcript rows in observed order', () => {
+    const created = parseWebSocketCdpEvent('Network.webSocketCreated', { requestId: '100.1', url: 'wss://app.example/ws' }, now);
+    const inbound = createObservedFrameSummary({
+      requestId: '100.1',
+      direction: 'inbound',
+      timestamp: '2026-05-15T12:00:00.500Z',
+      opcode: 1,
+      payloadData: '{"server":"ready"}',
+    });
+    const outbound = createObservedFrameSummary({
+      requestId: '100.1',
+      direction: 'outbound',
+      timestamp: '2026-05-15T12:00:01.000Z',
+      opcode: 1,
+      payloadData: '{"subscribe":"orders"}',
+    });
+
+    let sockets: DiscoveredSocket[] = [];
+    sockets = reduceDiscoveredSockets(sockets, created as WebSocketCaptureEvent);
+    sockets = reduceDiscoveredSockets(sockets, { type: 'frame', frame: inbound });
+    sockets = reduceDiscoveredSockets(sockets, { type: 'frame', frame: outbound });
+
+    expect(sockets[0].frameCounts).toEqual({ inbound: 1, outbound: 1 });
+    expect(sockets[0].bootstrapTranscript.map((frame) => frame.direction)).toEqual(['inbound', 'outbound']);
+    expect(sockets[0].bootstrapTranscript.map((frame) => frame.role)).toEqual(['wait-checkpoint', 'sendable']);
+    expect(sockets[0].firstOutboundFrames.map((frame) => frame.direction)).toEqual(['outbound']);
   });
 
   it('lists repeated URLs as distinct sockets when request ids differ', () => {
@@ -130,6 +163,106 @@ describe('WebSocket discovery domain', () => {
     expect(recipe.socketUrl).toBe('wss://app.example/ws');
     expect(recipe.recommendedEngine).toBe('page');
     expect(recipe.selectedEngine).toBe('extension');
+    expect(recipe.bootstrapTranscript.map((frame) => frame.direction)).toEqual(['outbound']);
     expect(recipe.bootstrapFrames.map((frame) => frame.body)).toEqual(['{"hello":2}']);
+  });
+
+  it('loads importable subprotocols from the request header when the response protocol is absent', () => {
+    const created = parseWebSocketCdpEvent('Network.webSocketCreated', { requestId: '100.1', url: 'wss://app.example/ws' }, now);
+    const request = parseWebSocketCdpEvent(
+      'Network.webSocketWillSendHandshakeRequest',
+      {
+        requestId: '100.1',
+        wallTime: 1,
+        request: {
+          headers: {
+            'Sec-WebSocket-Protocol': 'graphql-transport-ws',
+          },
+        },
+      },
+      now,
+    );
+    const response = parseWebSocketCdpEvent(
+      'Network.webSocketHandshakeResponseReceived',
+      {
+        requestId: '100.1',
+        timestamp: 2,
+        response: {
+          status: 101,
+          statusText: 'Switching Protocols',
+          headers: {},
+        },
+      },
+      now,
+    );
+
+    let sockets = reduceDiscoveredSockets([], created as WebSocketCaptureEvent);
+    sockets = reduceDiscoveredSockets(sockets, request as WebSocketCaptureEvent);
+    sockets = reduceDiscoveredSockets(sockets, response as WebSocketCaptureEvent);
+
+    const recipe = createConnectionRecipe({
+      socket: sockets[0],
+      target: { ...initialTargetContext, tabOrigin: 'https://app.example' },
+      now,
+    });
+
+    expect(sockets[0].handshake.protocol).toBe('');
+    expect(recipe.subprotocol).toBe('graphql-transport-ws');
+    expect(observedHandshakeSubprotocol(sockets[0].handshake)).toBe('graphql-transport-ws');
+  });
+
+  it('maps reusable WebSocket handshake fields from protocol-specific headers while keeping all headers available as context', () => {
+    const handshake = {
+      observed: true,
+      requestHeaders: [
+        { name: 'Sec-WebSocket-Protocol', value: 'graphql-transport-ws, graphql-ws', redacted: false },
+        { name: 'Sec-WebSocket-Extensions', value: 'permessage-deflate; client_max_window_bits', redacted: false },
+        { name: 'Origin', value: 'https://app.example', redacted: false },
+      ],
+      responseHeaders: [
+        { name: 'Sec-WebSocket-Extensions', value: 'permessage-deflate', redacted: false },
+      ],
+      status: 101,
+      statusText: 'Switching Protocols',
+      protocol: '',
+      extensions: '',
+      requestTime: now,
+      responseTime: now,
+    };
+
+    expect(observedHandshakeSubprotocol(handshake)).toBe('graphql-transport-ws, graphql-ws');
+    expect(observedHandshakeExtensions(handshake)).toBe('permessage-deflate');
+    expect(observedHandshakeHeader(handshake, 'Origin')).toBe('https://app.example');
+  });
+
+  it('classifies observed handshake headers by replay behavior', () => {
+    expect(handshakeHeaderUsage('Sec-WebSocket-Protocol')).toMatchObject({
+      role: 'constructor-subprotocol',
+      label: 'mapped to Subprotocol',
+    });
+    expect(handshakeHeaderUsage('Sec-WebSocket-Extensions')).toMatchObject({
+      role: 'browser-managed',
+      label: 'browser-managed',
+    });
+    expect(handshakeHeaderUsage('Sec-WebSocket-Accept')).toMatchObject({
+      role: 'browser-managed',
+      label: 'browser-managed',
+    });
+    expect(handshakeHeaderUsage('Origin')).toMatchObject({
+      role: 'browser-managed',
+      label: 'browser-managed',
+    });
+    expect(handshakeHeaderUsage('Cookie')).toMatchObject({
+      role: 'browser-managed',
+      label: 'browser-managed',
+    });
+    expect(handshakeHeaderUsage('Authorization')).toMatchObject({
+      role: 'evidence-only',
+      label: 'evidence only',
+    });
+    expect(handshakeHeaderUsage('X-Trace-Id')).toMatchObject({
+      role: 'evidence-only',
+      label: 'evidence only',
+    });
   });
 });

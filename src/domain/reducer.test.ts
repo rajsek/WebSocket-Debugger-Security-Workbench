@@ -20,7 +20,13 @@ describe('socket reducer replay state', () => {
     let state = socketReducer(initialSocketState, { type: 'load-replay-queue', queue });
     expect(state.status).toBe('idle');
     expect(state.target.socketUrl).toBe(target.socketUrl);
+    expect(state.transportContext.source).toBe('saved-recipe');
+    expect(state.transportContext.sourceArtifactId).toBe(socketRecipe.id);
     expect(state.activeReplayQueue?.items[0].status).toBe('queued');
+
+    state = socketReducer(state, { type: 'set-target-url', url: 'wss://manual.example/socket' });
+    expect(state.transportContext.source).toBe('manual');
+    expect(state.transportContext.handshake.observed).toBe(false);
 
     state = socketReducer(state, {
       type: 'edit-replay-queue-item',
@@ -49,10 +55,13 @@ function createRun(queue: ReturnType<typeof createReplayQueue>, now: string) {
     socketUrl: queue.socketRecipe.socketUrl,
     selectedEngine: queue.socketRecipe.selectedEngine,
     sourceMismatch: queue.sourceMismatch,
+    mode: 'manual' as const,
+    waitingCheckpointId: null,
     startedAt: now,
     endedAt: null,
     sentMessageIds: [],
     unsentMessageIds: queue.items.map((item) => item.id),
     inboundFrameIds: [],
+    checkpointOutcomes: [],
   };
 }

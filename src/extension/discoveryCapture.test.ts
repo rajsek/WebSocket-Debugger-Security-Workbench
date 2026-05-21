@@ -48,6 +48,7 @@ describe('discovery capture manager', () => {
 
     expect(snapshot.sockets.map((socket) => socket.requestId)).toEqual(['100.1', '100.2']);
     expect(snapshot.sockets[0].frameCounts.inbound).toBe(1);
+    expect(snapshot.sockets[0].bootstrapTranscript.map((frame) => frame.direction)).toEqual(['inbound']);
   });
 
   it('starts capture before reload for startup sockets', async () => {

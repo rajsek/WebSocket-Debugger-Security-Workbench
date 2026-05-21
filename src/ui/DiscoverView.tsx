@@ -1,6 +1,8 @@
 import { Bug, FileText, Plug, RefreshCw, Save, Square, Upload } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
-import type { DiscoveredSocket, ObservedFrameSummary, WebSocketCaptureSnapshot } from '../domain/types';
+import { handshakeHeaderUsage, observedHandshakeExtensions, observedHandshakeSubprotocol } from '../domain/discovery';
+import type { BootstrapTranscriptRow, DiscoveredSocket, WebSocketCaptureSnapshot } from '../domain/types';
+import { FrameStreamTable } from './FrameStreamTable';
 
 export function DiscoverView(props: {
   snapshot: WebSocketCaptureSnapshot;
@@ -19,8 +21,8 @@ export function DiscoverView(props: {
 }) {
   const [selectedFrameIds, setSelectedFrameIds] = useState<string[]>([]);
   const captureActive = props.snapshot.status === 'attaching' || props.snapshot.status === 'listening';
-  const bootstrapFrames = useMemo(
-    () => props.selectedSocket?.firstOutboundFrames.filter((frame) => frame.payloadKind === 'text') ?? [],
+  const bootstrapTranscript = useMemo(
+    () => props.selectedSocket?.bootstrapTranscript ?? [],
     [props.selectedSocket],
   );
 
@@ -28,7 +30,7 @@ export function DiscoverView(props: {
     setSelectedFrameIds([]);
   }, [props.selectedRequestId]);
 
-  function toggleFrame(frame: ObservedFrameSummary, checked: boolean) {
+  function toggleFrame(frame: BootstrapTranscriptRow, checked: boolean) {
     setSelectedFrameIds((current) => (checked ? [...current, frame.id] : current.filter((id) => id !== frame.id)));
   }
 
@@ -119,9 +121,9 @@ export function DiscoverView(props: {
                     <span>Status</span>
                     <span>{props.selectedSocket.handshake.status ?? 'unknown'} {props.selectedSocket.handshake.statusText}</span>
                     <span>Protocol</span>
-                    <span>{props.selectedSocket.handshake.protocol || 'none observed'}</span>
+                    <span>{observedHandshakeSubprotocol(props.selectedSocket.handshake) || 'none observed'}</span>
                     <span>Extensions</span>
-                    <span>{props.selectedSocket.handshake.extensions || 'none observed'}</span>
+                    <span>{observedHandshakeExtensions(props.selectedSocket.handshake) || 'none observed'}</span>
                     <span>Request headers</span>
                     <HeaderList headers={props.selectedSocket.handshake.requestHeaders} />
                     <span>Response headers</span>
@@ -132,27 +134,46 @@ export function DiscoverView(props: {
                 )}
               </section>
 
-              <section className="bootstrap-panel" aria-label="Outbound bootstrap frames">
+              <section className="bootstrap-panel" aria-label="Ordered bootstrap transcript">
                 <div className="detail-heading">
                   <Upload size={16} />
-                  <h3>Bootstrap Frames</h3>
-                  <span className="mode-pill">{bootstrapFrames.length}</span>
+                  <h3>Bootstrap Transcript</h3>
+                  <span className="mode-pill">{bootstrapTranscript.length}</span>
                 </div>
-                {bootstrapFrames.length === 0 ? (
-                  <p className="muted-line">No text outbound bootstrap frames observed.</p>
-                ) : (
-                  <ol className="bootstrap-list">
-                    {bootstrapFrames.map((frame, index) => (
-                      <li key={frame.id}>
-                        <label>
-                          <input type="checkbox" checked={selectedFrameIds.includes(frame.id)} onChange={(event) => toggleFrame(frame, event.target.checked)} />
-                          <span>Bootstrap frame {index + 1}</span>
-                          <code>{frame.preview}</code>
+                <div className="stream-pane transcript-stream-pane discover-transcript-pane">
+                  <FrameStreamTable
+                    rows={bootstrapTranscript.map((frame) => ({
+                      id: frame.id,
+                      direction: frame.direction,
+                      timestamp: frame.timestamp,
+                      payloadKind: frame.payloadKind,
+                      payloadLength: frame.payloadLength,
+                      body: frame.preview,
+                      selected: selectedFrameIds.includes(frame.id),
+                      role: frame.role,
+                    }))}
+                    ariaLabel="Discovered bootstrap transcript rows"
+                    emptyText="No ordered transcript rows observed for this socket. Restart capture or use Capture + reload to observe startup traffic."
+                    renderActions={(row) => {
+                      const frame = bootstrapTranscript.find((candidate) => candidate.id === row.id);
+                      if (!frame) return null;
+                      const index = bootstrapTranscript.findIndex((candidate) => candidate.id === row.id);
+                      const rowLabel = `${frame.direction === 'outbound' ? 'outbound' : 'inbound'} row ${index + 1}`;
+                      return (
+                        <label className="transcript-select discover-transcript-select">
+                          <input
+                            type="checkbox"
+                            aria-label={`Select ${rowLabel}`}
+                            checked={selectedFrameIds.includes(frame.id)}
+                            onChange={(event) => toggleFrame(frame, event.target.checked)}
+                          />
+                          <span>{rowLabel}</span>
+                          <small>{frame.role}</small>
                         </label>
-                      </li>
-                    ))}
-                  </ol>
-                )}
+                      );
+                    }}
+                  />
+                </div>
               </section>
 
               <div className="discover-actions">
@@ -166,13 +187,13 @@ export function DiscoverView(props: {
                   <Save size={16} /> Save socket
                 </button>
                 <button type="button" onClick={() => props.onSaveBootstrap(props.selectedSocket as DiscoveredSocket, selectedFrameIds)} disabled={selectedFrameIds.length === 0}>
-                  <Save size={16} /> Save messages
+                  <Save size={16} /> Save transcript
                 </button>
                 <button type="button" className="primary-action" onClick={() => props.onImportBootstrap(props.selectedSocket as DiscoveredSocket, selectedFrameIds)} disabled={selectedFrameIds.length === 0}>
-                  <Upload size={16} /> Import With Bootstrap
+                  <Upload size={16} /> Import Transcript
                 </button>
               </div>
-              <p className="controlled-note">Import creates a new controlled connection seeded from observed data; it does not take over the page socket.</p>
+              <p className="controlled-note">Import creates a new controlled connection seeded from observed data. Inbound rows are checkpoints or context, not sendable responses.</p>
             </>
           ) : (
             <div className="empty-state">Select an observed socket to inspect handshake context and bootstrap candidates.</div>
@@ -187,12 +208,18 @@ function HeaderList(props: { headers: { name: string; value: string }[] }) {
   if (props.headers.length === 0) return <span>none observed</span>;
   return (
     <ul className="header-list">
-      {props.headers.map((header) => (
-        <li key={header.name}>
-          <span>{header.name}</span>
-          <code>{header.value}</code>
-        </li>
-      ))}
+      {props.headers.map((header) => {
+        const usage = handshakeHeaderUsage(header.name);
+        return (
+          <li key={header.name}>
+            <span>{header.name}</span>
+            <code>{header.value}</code>
+            <small className={`header-usage header-usage-${usage.role}`} title={usage.description}>
+              {usage.label}
+            </small>
+          </li>
+        );
+      })}
     </ul>
   );
 }

@@ -1,7 +1,9 @@
 import { redactSensitive } from './evidence';
 import { previewBody } from './frameUtils';
 import { summarizeCdpBinaryPayload } from './binaryPayload';
+import { appendBootstrapTranscriptRow, selectedTranscriptRows } from './transcript';
 import type {
+  BootstrapTranscriptRow,
   ConnectionRecipe,
   DiscoveredSocket,
   EngineMode,
@@ -15,7 +17,8 @@ import type {
   WebSocketCaptureStatus,
 } from './types';
 
-const bootstrapFrameLimit = 5;
+const outboundBootstrapFrameLimit = 5;
+const bootstrapTranscriptFrameLimit = 12;
 const sensitiveHeaderNames = new Set([
   'authorization',
   'cookie',
@@ -26,6 +29,32 @@ const sensitiveHeaderNames = new Set([
   'x-csrf-token',
   'x-xsrf-token',
 ]);
+
+const browserManagedHandshakeHeaderNames = new Set([
+  'accept-encoding',
+  'accept-language',
+  'cache-control',
+  'connection',
+  'cookie',
+  'host',
+  'origin',
+  'pragma',
+  'sec-websocket-accept',
+  'sec-websocket-extensions',
+  'sec-websocket-key',
+  'sec-websocket-version',
+  'set-cookie',
+  'upgrade',
+  'user-agent',
+]);
+
+export type HandshakeHeaderUsageRole = 'constructor-subprotocol' | 'browser-managed' | 'evidence-only';
+
+export interface HandshakeHeaderUsage {
+  role: HandshakeHeaderUsageRole;
+  label: string;
+  description: string;
+}
 
 export function createEmptyCaptureSnapshot(tabId: number, status: WebSocketCaptureStatus = 'idle', now: string | null = null): WebSocketCaptureSnapshot {
   return {
@@ -179,7 +208,7 @@ export function reduceDiscoveredSockets(sockets: DiscoveredSocket[], event: WebS
         outbound: socket.frameCounts.outbound + (event.frame.direction === 'outbound' ? 1 : 0),
       };
       const firstOutboundFrames =
-        event.frame.direction === 'outbound' && socket.firstOutboundFrames.length < bootstrapFrameLimit
+        event.frame.direction === 'outbound' && socket.firstOutboundFrames.length < outboundBootstrapFrameLimit
           ? [...socket.firstOutboundFrames, event.frame]
           : socket.firstOutboundFrames;
       return {
@@ -187,6 +216,7 @@ export function reduceDiscoveredSockets(sockets: DiscoveredSocket[], event: WebS
         lifecycle: 'active',
         lastActivityAt: event.frame.timestamp,
         frameCounts: counts,
+        bootstrapTranscript: appendBootstrapTranscriptRow(socket.bootstrapTranscript ?? [], event.frame, bootstrapTranscriptFrameLimit),
         firstOutboundFrames,
       };
     }
@@ -257,20 +287,70 @@ export function createConnectionRecipe(params: {
 }): ConnectionRecipe {
   const recommendation = recommendEngine(params.socket.url, params.target.tabOrigin);
   const selectedFrameIds = new Set(params.selectedFrameIds ?? []);
-  const bootstrapFrames = params.socket.firstOutboundFrames.filter((frame) => selectedFrameIds.has(frame.id) && frame.payloadKind === 'text');
+  const bootstrapTranscript = selectedTranscriptRows(bootstrapTranscriptForSocket(params.socket), params.selectedFrameIds ?? []);
+  const bootstrapFrames = bootstrapTranscript.filter((frame) => frame.direction === 'outbound' && frame.payloadKind === 'text');
   return {
     id: crypto.randomUUID(),
     sourceRequestId: params.socket.requestId,
     socketUrl: params.socket.url,
-    subprotocol: params.socket.handshake.protocol,
+    subprotocol: observedHandshakeSubprotocol(params.socket.handshake),
     recommendedEngine: recommendation.engine,
     selectedEngine: params.engineOverride ?? recommendation.engine,
     recommendationReason: recommendation.reason,
     tabOrigin: params.target.tabOrigin,
     createdAt: params.now ?? new Date().toISOString(),
     handshake: params.socket.handshake,
+    bootstrapTranscript,
     bootstrapFrames,
   };
+}
+
+export function observedHandshakeSubprotocol(handshake: HandshakeSummary): string {
+  return handshake.protocol || observedHandshakeHeader(handshake, 'sec-websocket-protocol');
+}
+
+export function observedHandshakeExtensions(handshake: HandshakeSummary): string {
+  return handshake.extensions || observedHandshakeHeader(handshake, 'sec-websocket-extensions');
+}
+
+export function observedHandshakeHeader(handshake: HandshakeSummary, name: string): string {
+  return headerValue(handshake.responseHeaders, name) || headerValue(handshake.requestHeaders, name);
+}
+
+export function handshakeHeaderUsage(name: string): HandshakeHeaderUsage {
+  const normalized = name.toLowerCase();
+  if (normalized === 'sec-websocket-protocol') {
+    return {
+      role: 'constructor-subprotocol',
+      label: 'mapped to Subprotocol',
+      description: 'Applied as the WebSocket constructor protocol argument when a controlled socket is created.',
+    };
+  }
+
+  if (browserManagedHandshakeHeaderNames.has(normalized) || normalized.startsWith('sec-websocket-')) {
+    return {
+      role: 'browser-managed',
+      label: 'browser-managed',
+      description: 'Observed only. Browser WebSocket creates or negotiates this header; JavaScript cannot set it directly.',
+    };
+  }
+
+  return {
+    role: 'evidence-only',
+    label: 'evidence only',
+    description: 'Observed context only. Browser WebSocket cannot replay arbitrary request headers.',
+  };
+}
+
+export function bootstrapTranscriptForSocket(socket: DiscoveredSocket): BootstrapTranscriptRow[] {
+  if ((socket.bootstrapTranscript ?? []).length > 0) return socket.bootstrapTranscript;
+  return socket.firstOutboundFrames.map((frame) => ({
+    ...frame,
+    sourceFrameId: frame.id,
+    sourceFrameHash: stableTextHash(frame.body),
+    role: frame.payloadKind === 'text' ? 'sendable' : 'observed-only',
+    checkpointMode: 'exact',
+  }));
 }
 
 export function recommendEngine(socketUrl: string, tabOrigin: string): { engine: EngineMode; reason: string } {
@@ -307,6 +387,7 @@ function createDiscoveredSocket(requestId: string, url: string, timestamp: strin
       inbound: 0,
       outbound: 0,
     },
+    bootstrapTranscript: [],
     firstOutboundFrames: [],
     error: null,
     closedAt: null,
@@ -318,7 +399,8 @@ function requestIdForEvent(event: Exclude<WebSocketCaptureEvent, { type: 'create
 }
 
 function headerValue(headers: RedactedHeader[], name: string): string {
-  return headers.find((header) => header.name.toLowerCase() === name)?.value ?? '';
+  const normalizedName = name.toLowerCase();
+  return headers.find((header) => header.name.toLowerCase() === normalizedName)?.value ?? '';
 }
 
 function cdpTimestamp(value: unknown, fallback: string): string {

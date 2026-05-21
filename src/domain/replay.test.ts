@@ -33,6 +33,7 @@ describe('replay library domain', () => {
       responseTime: now,
     },
     frameCounts: { outbound: 2, inbound: 1 },
+    bootstrapTranscript: [],
     firstOutboundFrames: [
       {
         id: 'text-1',
@@ -83,6 +84,26 @@ describe('replay library domain', () => {
     expect(discovered.sourceRequestId).toBe('100.1');
     expect(discovered.subprotocol).toBe('graphql-transport-ws');
     expect(current.socketUrl).toBe('wss://api.example.net/ws');
+  });
+
+  it('preserves discovered request-header subprotocols when the response protocol is absent', () => {
+    const requestOnlyProtocolSocket: DiscoveredSocket = {
+      ...socket,
+      handshake: {
+        ...socket.handshake,
+        requestHeaders: [{ name: 'Sec-WebSocket-Protocol', value: 'graphql-transport-ws', redacted: false }],
+        responseHeaders: [],
+        protocol: '',
+      },
+    };
+
+    const discovered = createSavedSocketRecipeFromDiscovery({
+      socket: requestOnlyProtocolSocket,
+      target: { ...initialTargetContext, tabOrigin: 'https://example.com', engine: 'page' },
+      now,
+    });
+
+    expect(discovered.subprotocol).toBe('graphql-transport-ws');
   });
 
   it('creates message sets from outbound text frames only', () => {

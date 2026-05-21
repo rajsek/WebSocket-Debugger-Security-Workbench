@@ -112,7 +112,41 @@ describe('App', () => {
             requestTime: '2026-05-15T12:00:00.000Z',
             responseTime: '2026-05-15T12:00:00.100Z',
           },
-          frameCounts: { outbound: 1, inbound: 0 },
+          frameCounts: { outbound: 1, inbound: 1 },
+          bootstrapTranscript: [
+            {
+              id: 'server-hello',
+              requestId: '100.1',
+              direction: 'inbound' as const,
+              timestamp: '2026-05-15T12:00:00.500Z',
+              opcode: 1,
+              payloadKind: 'text' as const,
+              body: '{"server":"hello"}',
+              preview: '{"server":"hello"}',
+              payloadLength: 18,
+              redacted: false,
+              sourceFrameId: 'server-hello',
+              sourceFrameHash: 'server-hash',
+              role: 'wait-checkpoint' as const,
+              checkpointMode: 'exact' as const,
+            },
+            {
+              id: 'boot-1',
+              requestId: '100.1',
+              direction: 'outbound' as const,
+              timestamp: '2026-05-15T12:00:01.000Z',
+              opcode: 1,
+              payloadKind: 'text' as const,
+              body: '{"token":"secret-value","subscribe":"orders"}',
+              preview: '{"token":"[redacted]","subscribe":"orders"}',
+              payloadLength: 45,
+              redacted: true,
+              sourceFrameId: 'boot-1',
+              sourceFrameHash: 'boot-hash',
+              role: 'sendable' as const,
+              checkpointMode: 'exact' as const,
+            },
+          ],
           firstOutboundFrames: [
             {
               id: 'boot-1',
@@ -195,6 +229,79 @@ describe('App', () => {
     expect(engine).toBeDisabled();
   });
 
+  it('lets testers set a subprotocol before connecting', async () => {
+    render(<App surface="sidepanel" loadTabContext={async () => ({ tabId: 1, origin: 'https://example.com' })} />);
+
+    fireEvent.change(await screen.findByPlaceholderText('wss://example.com/socket'), { target: { value: 'wss://example.com/socket' } });
+    fireEvent.change(screen.getByLabelText('Subprotocol'), { target: { value: 'graphql-transport-ws' } });
+    fireEvent.click(screen.getByRole('button', { name: /connect/i }));
+
+    expect(MockWebSocket.instances[0].protocols).toBe('graphql-transport-ws');
+    expect(screen.getByLabelText('Subprotocol')).toBeDisabled();
+  });
+
+  it('passes comma-separated subprotocol input as a protocol list', async () => {
+    render(<App surface="sidepanel" loadTabContext={async () => ({ tabId: 1, origin: 'https://example.com' })} />);
+
+    fireEvent.change(await screen.findByPlaceholderText('wss://example.com/socket'), { target: { value: 'wss://example.com/socket' } });
+    fireEvent.change(screen.getByLabelText('Subprotocol'), { target: { value: 'graphql-transport-ws, graphql-ws' } });
+    fireEvent.click(screen.getByRole('button', { name: /connect/i }));
+
+    expect(MockWebSocket.instances[0].protocols).toEqual(['graphql-transport-ws', 'graphql-ws']);
+  });
+
+  it('loads imported request Sec-WebSocket-Protocol into the subprotocol field when response protocol is absent', async () => {
+    const socket = discoverySnapshot().sockets[0];
+    vi.mocked(getWebSocketDiscoverySnapshot).mockResolvedValueOnce(discoverySnapshot({
+      sockets: [
+        {
+          ...socket,
+          url: 'wss://api.example.net/socket',
+          handshake: {
+            ...socket.handshake,
+            requestHeaders: [
+              { name: 'Sec-WebSocket-Protocol', value: 'graphql-transport-ws', redacted: false },
+              { name: 'Origin', value: 'https://example.com', redacted: false },
+              { name: 'X-Trace-Id', value: 'trace-123', redacted: false },
+            ],
+            responseHeaders: [
+              { name: 'Sec-WebSocket-Accept', value: 'accept-key', redacted: false },
+              { name: 'Sec-WebSocket-Extensions', value: 'permessage-deflate', redacted: false },
+            ],
+            protocol: '',
+            extensions: '',
+          },
+        },
+      ],
+    }));
+
+    render(<App surface="sidepanel" loadTabContext={async () => ({ tabId: 1, origin: 'https://example.com' })} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /discover websockets/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /^import target/i }));
+
+    expect(screen.getByLabelText('Subprotocol')).toHaveValue('graphql-transport-ws');
+
+    fireEvent.click(screen.getByRole('button', { name: /^context$/i }));
+    const context = screen.getByLabelText('Transport context');
+    expect(within(context).getByText('Sec-WebSocket-Protocol')).toBeInTheDocument();
+    expect(within(context).getByText('mapped to Subprotocol')).toBeInTheDocument();
+    expect(within(context).getByText('Origin')).toBeInTheDocument();
+    expect(within(context).getByText('https://example.com')).toBeInTheDocument();
+    expect(within(context).getByText('X-Trace-Id')).toBeInTheDocument();
+    expect(within(context).getByText('trace-123')).toBeInTheDocument();
+    expect(within(context).getByText('evidence only')).toBeInTheDocument();
+    expect(within(context).getByText('Sec-WebSocket-Accept')).toBeInTheDocument();
+    expect(within(context).getByText('accept-key')).toBeInTheDocument();
+    expect(within(context).getByText('Sec-WebSocket-Extensions')).toBeInTheDocument();
+    expect(within(context).getByText('permessage-deflate')).toBeInTheDocument();
+    expect(within(context).getAllByText('browser-managed')).toHaveLength(3);
+
+    fireEvent.click(screen.getByRole('button', { name: /connect/i }));
+    expect(MockWebSocket.instances[0].url).toBe('wss://api.example.net/socket');
+    expect(MockWebSocket.instances[0].protocols).toBe('graphql-transport-ws');
+  });
+
   it('lets testers select a known echo endpoint without losing custom URL support', async () => {
     render(<App surface="sidepanel" loadTabContext={async () => ({ tabId: 1, origin: 'https://example.com' })} />);
 
@@ -242,12 +349,14 @@ describe('App', () => {
     expect(await screen.findByText('detached by debugger')).toBeInTheDocument();
     expect(screen.getAllByText('wss://example.com/socket')).not.toHaveLength(0);
     expect(screen.getAllByText('graphql-transport-ws')).not.toHaveLength(0);
+    expect(screen.getByText('mapped to Subprotocol')).toBeInTheDocument();
+    expect(screen.getByText('evidence only')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /add observed evidence/i }));
     fireEvent.click(screen.getByRole('button', { name: /^evidence$/i }));
 
     expect(await screen.findByText('observed 100.1')).toBeInTheDocument();
-    expect(screen.getByText('1 outbound / 0 inbound')).toBeInTheDocument();
+    expect(screen.getByText('1 outbound / 1 inbound')).toBeInTheDocument();
   });
 
   it('imports a discovered target without connecting or sending frames', async () => {
@@ -260,14 +369,23 @@ describe('App', () => {
 
     expect(screen.getByPlaceholderText('wss://example.com/socket')).toHaveValue('wss://example.com/socket');
     expect(screen.getByLabelText('Engine')).toHaveValue('page');
+    expect(screen.getByLabelText('Subprotocol')).toHaveValue('graphql-transport-ws');
     expect(MockWebSocket.instances).toHaveLength(0);
+
+    fireEvent.click(screen.getByRole('button', { name: /^context$/i }));
+    expect(screen.getByLabelText('Transport context')).toBeInTheDocument();
+    expect(screen.getByText('discovered request 100.1')).toBeInTheDocument();
+    expect(screen.getByText('Page session')).toBeInTheDocument();
+    expect(screen.getByText('Authorization')).toBeInTheDocument();
+    expect(screen.getByText('[redacted]')).toBeInTheDocument();
+    expect(screen.getByText(/Browser WebSocket cannot replay arbitrary custom request headers/i)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /^evidence$/i }));
     expect(await screen.findByText('recipe 100.1')).toBeInTheDocument();
     expect(screen.getByText('page import')).toBeInTheDocument();
   });
 
-  it('queues selected bootstrap frames and requires explicit replay after connect', async () => {
+  it('imports selected transcript rows and requires explicit replay after connect', async () => {
     vi.mocked(getWebSocketDiscoverySnapshot).mockResolvedValueOnce(discoverySnapshot({
       sockets: [
         {
@@ -280,10 +398,12 @@ describe('App', () => {
     render(<App surface="sidepanel" loadTabContext={async () => ({ tabId: 1, origin: 'https://example.com' })} />);
 
     fireEvent.click(await screen.findByRole('button', { name: /discover websockets/i }));
-    fireEvent.click(await screen.findByLabelText(/bootstrap frame 1/i));
-    fireEvent.click(screen.getByRole('button', { name: /import with bootstrap/i }));
+    expect(await screen.findByLabelText(/inbound row 1/i)).toBeInTheDocument();
+    fireEvent.click(await screen.findByLabelText(/outbound row 2/i));
+    fireEvent.click(screen.getByRole('button', { name: /import transcript/i }));
 
-    expect(screen.getByRole('button', { name: /replay bootstrap/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /send next/i })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: /replay bootstrap/i })).not.toBeInTheDocument();
     expect(MockWebSocket.instances).toHaveLength(0);
 
     fireEvent.click(screen.getByRole('button', { name: /connect/i }));
@@ -291,12 +411,35 @@ describe('App', () => {
     await act(async () => {
       socket.dispatchEvent(new Event('open'));
     });
-    fireEvent.click(screen.getByRole('button', { name: /replay bootstrap/i }));
+    fireEvent.click(screen.getByRole('button', { name: /send next/i }));
 
     expect(socket.sent).toContain('{"token":"secret-value","subscribe":"orders"}');
     expect(socket.protocols).toBe('graphql-transport-ws');
+    fireEvent.click(screen.getByRole('button', { name: /finish run/i }));
     fireEvent.click(screen.getByRole('button', { name: /^evidence$/i }));
-    expect(await screen.findByText('bootstrap 100.1')).toBeInTheDocument();
+    expect(await screen.findByText(/^replay /i)).toBeInTheDocument();
+  });
+
+  it('shows imported inbound transcript rows as read-only checkpoints beside outbound messages', async () => {
+    vi.mocked(getWebSocketDiscoverySnapshot).mockResolvedValueOnce(discoverySnapshot({
+      sockets: [
+        {
+          ...discoverySnapshot().sockets[0],
+          url: 'wss://api.example.net/socket',
+        },
+      ],
+    }));
+
+    render(<App surface="sidepanel" loadTabContext={async () => ({ tabId: 1, origin: 'https://example.com' })} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /discover websockets/i }));
+    fireEvent.click(await screen.findByLabelText(/inbound row 1/i));
+    fireEvent.click(await screen.findByLabelText(/outbound row 2/i));
+    fireEvent.click(screen.getByRole('button', { name: /import transcript/i }));
+
+    expect(await screen.findByLabelText('Transcript row 1')).toHaveTextContent('{"server":"hello"}');
+    expect(screen.getByLabelText('Replay message 2')).toHaveValue('{"token":"secret-value","subscribe":"orders"}');
+    expect(screen.getByText(/Inbound rows are wait checkpoints/i)).toBeInTheDocument();
   });
 
   it('saves current target and outbound messages into the replay library, loads an editable queue, and records replay evidence', async () => {
@@ -386,6 +529,92 @@ describe('App', () => {
     await waitFor(() => expect(screen.getByText('0 saved artifacts')).toBeInTheDocument());
     expect(confirm).toHaveBeenCalledWith(expect.stringContaining('Clear saved replay artifacts'));
     confirm.mockRestore();
+  });
+
+  it('previews replay-library target metadata and source mismatch before load', async () => {
+    const artifactJson = JSON.stringify([
+      {
+        schemaVersion: 1,
+        kind: 'saved-socket-recipe',
+        id: 'socket-100',
+        name: 'Discovered socket',
+        createdAt: '2026-05-16T10:00:00.000Z',
+        updatedAt: '2026-05-16T10:00:00.000Z',
+        socketUrl: 'wss://example.com/socket',
+        subprotocol: 'graphql-transport-ws',
+        selectedEngine: 'page',
+        recommendedEngine: 'page',
+        tabOrigin: 'https://example.com',
+        authAssumption: 'page-session',
+        sourceType: 'discovery',
+        sourceRequestId: '100.1',
+        handshake: {
+          observed: true,
+          requestHeaders: [
+            { name: 'Authorization', value: '[redacted]', redacted: true },
+            { name: 'Origin', value: 'https://example.com', redacted: false },
+          ],
+          responseHeaders: [
+            { name: 'sec-websocket-protocol', value: 'graphql-transport-ws', redacted: false },
+            { name: 'X-Trace-Id', value: 'trace-456', redacted: false },
+          ],
+          status: 101,
+          statusText: 'Switching Protocols',
+          protocol: 'graphql-transport-ws',
+          extensions: '',
+          requestTime: '2026-05-15T12:00:00.000Z',
+          responseTime: '2026-05-15T12:00:00.100Z',
+        },
+      },
+      {
+        schemaVersion: 1,
+        kind: 'saved-message-set',
+        id: 'messages-200',
+        name: 'Other messages',
+        createdAt: '2026-05-16T10:00:00.000Z',
+        updatedAt: '2026-05-16T10:00:00.000Z',
+        sourceType: 'discovery',
+        socketUrl: 'wss://other.example/socket',
+        tabOrigin: 'https://other.example',
+        sourceRequestId: '200.1',
+        messages: [
+          {
+            id: 'message-1',
+            body: '{"op":"subscribe"}',
+            preview: '{"op":"subscribe"}',
+            payloadLength: 18,
+            sourceFrameId: 'frame-1',
+            sourceFrameHash: 'hash-1',
+            sourceTimestamp: '2026-05-15T12:00:01.000Z',
+            createdAt: '2026-05-16T10:00:00.000Z',
+            updatedAt: '2026-05-16T10:00:00.000Z',
+          },
+        ],
+      },
+    ]);
+
+    render(<App surface="sidepanel" loadTabContext={async () => ({ tabId: 1, origin: 'https://example.com' })} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /replay library/i }));
+    fireEvent.change(screen.getByLabelText('Replay import JSON'), { target: { value: artifactJson } });
+    fireEvent.click(screen.getByRole('button', { name: /^import$/i }));
+
+    const preview = await screen.findByLabelText('Replay load preview');
+    expect(within(preview).getByText('wss://example.com/socket')).toBeInTheDocument();
+    expect(within(preview).getByText('page')).toBeInTheDocument();
+    expect(within(preview).getByText('graphql-transport-ws')).toBeInTheDocument();
+    expect(within(preview).getByText('discovery request 100.1')).toBeInTheDocument();
+    expect(within(preview).getByText('1 selected')).toBeInTheDocument();
+    expect(within(preview).getByText('observed')).toBeInTheDocument();
+    expect(within(preview).getByText('Message set was captured from wss://other.example/socket, not wss://example.com/socket.')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /load editable queue/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^context$/i }));
+    const context = screen.getByLabelText('Transport context');
+    expect(within(context).getByText('Origin')).toBeInTheDocument();
+    expect(within(context).getByText('https://example.com')).toBeInTheDocument();
+    expect(within(context).getByText('X-Trace-Id')).toBeInTheDocument();
+    expect(within(context).getByText('trace-456')).toBeInTheDocument();
   });
 
   it('routes page engine commands only from the direct page overlay', async () => {

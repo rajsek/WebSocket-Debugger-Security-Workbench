@@ -1,7 +1,5 @@
 import {
   Activity,
-  ArrowDownLeft,
-  ArrowUpRight,
   Bug,
   Copy,
   Eraser,
@@ -17,10 +15,9 @@ import {
   Upload,
 } from 'lucide-react';
 import { useEffect, useMemo, useReducer, useRef, useState } from 'react';
-import { createConnectionRecipe } from '../domain/discovery';
+import { createConnectionRecipe, handshakeHeaderUsage, observedHandshakeExtensions, observedHandshakeSubprotocol } from '../domain/discovery';
 import { summarizeWebSocketMessageData } from '../domain/binaryPayload';
 import {
-  createBootstrapReplayEvidenceRecord,
   createEvidenceRecord,
   createObservedSocketEvidenceRecord,
   createRecipeImportEvidenceRecord,
@@ -41,7 +38,24 @@ import { initialSocketState, socketReducer } from '../domain/reducer';
 import { getSecurityTest, securityTests } from '../domain/securityCatalog';
 import { canRunSecurityTest, runPassiveSecurityTest } from '../domain/securityRunner';
 import { testEndpointPresets } from '../domain/testEndpoints';
-import type { ConnectionRecipe, ConnectionStatus, DiscoveredSocket, EvidenceRecord, FrameRecord, ReplayQueue, ReplayQueueItem, ReplayRunStatus, SavedMessageSet, SavedSocketRecipe, SecurityRunRequest } from '../domain/types';
+import { isSendableReplayItem, nextOrderedReplayStep, nextSendableReplayItem, selectedSendableReplayItems } from '../domain/transcript';
+import type {
+  ConnectionStatus,
+  DiscoveredSocket,
+  EvidenceRecord,
+  FrameRecord,
+  HandshakeSummary,
+  RedactedHeader,
+  ReplayQueue,
+  ReplayQueueItem,
+  ReplayRunMode,
+  ReplayRunStatus,
+  SavedMessageSet,
+  SavedSocketRecipe,
+  SecurityRunRequest,
+  TargetContext,
+  TransportContextState,
+} from '../domain/types';
 import { validateWebSocketUrl } from '../domain/url';
 import {
   captureWebSocketDiscoveryWithReload,
@@ -65,6 +79,7 @@ import {
   saveReplayArtifacts,
 } from '../extension/replayStorage';
 import { DiscoverView } from './DiscoverView';
+import { DirectionMarker, FrameStreamTable, formatFrameTime } from './FrameStreamTable';
 import { ReplayLibraryView, ReplayQueuePanel } from './ReplayLibraryView';
 
 interface AppProps {
@@ -79,6 +94,7 @@ type PageEngineMessage =
   | { source: 'ws-workbench-page-engine'; type: 'frame'; direction: 'inbound' | 'outbound'; body: string; timestamp: string; metadata?: Record<string, string> };
 
 const pageUiSource = 'ws-workbench-page-overlay';
+const replayCheckpointTimeoutMs = 5000;
 
 export function App({ surface, loadTabContext, subscribeTabContext, transport = 'extension' }: AppProps) {
   const [state, dispatch] = useReducer(socketReducer, initialSocketState);
@@ -88,6 +104,7 @@ export function App({ surface, loadTabContext, subscribeTabContext, transport = 
   const [debugLabBusy, setDebugLabBusy] = useState(false);
   const [discoveryBusy, setDiscoveryBusy] = useState(false);
   const [replayMessage, setReplayMessage] = useState('');
+  const [transportContextOpen, setTransportContextOpen] = useState(false);
   const socketRef = useRef<WebSocket | null>(null);
   const pageDebugLabRef = useRef<{ tabId: number | null; cdpBypass: boolean }>({ tabId: null, cdpBypass: false });
 
@@ -202,21 +219,95 @@ export function App({ surface, loadTabContext, subscribeTabContext, transport = 
     if (state.status === 'error' || state.status === 'stale') finishReplayRun('failed');
   }, [state.activeReplayRun?.id, state.activeReplayRun?.status, state.status]);
 
+  useEffect(() => {
+    const run = state.activeReplayRun;
+    const queue = state.activeReplayQueue;
+    if (!run || !queue || run.status !== 'running' || state.status !== 'open') return;
+    if (run.mode !== 'ordered' && run.mode !== 'ordered-with-waits') return;
+    if (run.waitingCheckpointId || queue.waitingCheckpointId) return;
+
+    const step = nextOrderedReplayStep({
+      items: queue.items,
+      selectedIds: state.selectedReplayQueueItemIds,
+      withWaits: run.mode === 'ordered-with-waits',
+    });
+
+    if (step.type === 'complete') {
+      finishReplayRun('completed');
+      return;
+    }
+
+    if (step.type === 'send') {
+      const sent = sendBody(step.item.body);
+      if (!sent) {
+        finishReplayRun('failed');
+        return;
+      }
+      dispatch({ type: 'mark-replay-item-sent', itemId: step.item.id, sentAt: new Date().toISOString() });
+      return;
+    }
+
+    if (step.type === 'wait') {
+      dispatch({
+        type: 'mark-replay-checkpoint-waiting',
+        itemId: step.item.id,
+        timeoutAt: new Date(Date.now() + replayCheckpointTimeoutMs).toISOString(),
+      });
+    }
+  }, [state.activeReplayQueue?.items, state.activeReplayQueue?.waitingCheckpointId, state.activeReplayRun, state.selectedReplayQueueItemIds, state.status]);
+
+  useEffect(() => {
+    const queue = state.activeReplayQueue;
+    const run = state.activeReplayRun;
+    if (!queue || !run || run.status !== 'running' || !run.waitingCheckpointId) return undefined;
+    const waiting = queue.items.find((item) => item.id === run.waitingCheckpointId && item.status === 'waiting');
+    if (!waiting?.timeoutAt) return undefined;
+    const delay = Math.max(0, new Date(waiting.timeoutAt).getTime() - Date.now());
+    const timer = window.setTimeout(() => {
+      const timedOutAt = new Date().toISOString();
+      const outcome = {
+        rowId: waiting.id,
+        sourceFrameHash: waiting.sourceFrameHash,
+        status: 'timeout' as const,
+        matchedFrameId: null,
+        timestamp: timedOutAt,
+      };
+      const inboundFrames = state.frames.filter((frame) => frame.direction === 'inbound' && frame.timestamp >= run.startedAt);
+      const unsentIds = queue.items
+        .filter((item) => isSendableReplayItem(item) && item.status !== 'sent' && item.status !== 'skipped' && item.status !== 'removed')
+        .map((item) => item.id);
+      const finalRun = {
+        ...run,
+        status: 'partial' as const,
+        endedAt: timedOutAt,
+        waitingCheckpointId: null,
+        inboundFrameIds: inboundFrames.map((frame) => frame.id),
+        unsentMessageIds: unsentIds,
+        checkpointOutcomes: [...run.checkpointOutcomes, outcome],
+      };
+      dispatch({ type: 'mark-replay-checkpoint-timeout', itemId: waiting.id, timedOutAt });
+      dispatch({ type: 'finish-replay-run', status: 'partial', endedAt: timedOutAt, inboundFrameIds: finalRun.inboundFrameIds });
+      dispatch({ type: 'add-evidence', result: createReplayRunEvidenceRecord({ queue, run: finalRun, inboundTranscriptPreviews: inboundFrames.map((frame) => frame.body) }) });
+    }, delay);
+    return () => window.clearTimeout(timer);
+  }, [state.activeReplayQueue?.items, state.activeReplayRun?.waitingCheckpointId, state.activeReplayRun?.status]);
+
   function connect() {
     try {
       const parsed = validateWebSocketUrl(state.target.socketUrl);
+      const protocols = parseSubprotocolInput(state.target.subprotocol);
       if (state.target.engine === 'page') {
         if (transport !== 'page') {
           dispatch({ type: 'set-status', status: 'error', error: 'Page engine is available only in the Direct Page Overlay.' });
           return;
         }
         dispatch({ type: 'set-status', status: 'connecting' });
-        postPageCommand(state.target.subprotocol ? { type: 'connect', url: parsed.toString(), protocol: state.target.subprotocol } : { type: 'connect', url: parsed.toString() });
+        postPageCommand(protocols ? { type: 'connect', url: parsed.toString(), protocol: protocols } : { type: 'connect', url: parsed.toString() });
         return;
       }
 
       dispatch({ type: 'set-status', status: 'connecting' });
-      const socket = state.target.subprotocol ? new WebSocket(parsed.toString(), state.target.subprotocol) : new WebSocket(parsed.toString());
+      const socket = protocols ? new WebSocket(parsed.toString(), protocols) : new WebSocket(parsed.toString());
       socket.binaryType = 'arraybuffer';
       socketRef.current = socket;
       socket.addEventListener('open', () => dispatch({ type: 'set-status', status: 'open' }));
@@ -391,21 +482,19 @@ export function App({ surface, loadTabContext, subscribeTabContext, transport = 
 
   function importDiscoveredBootstrap(socket: DiscoveredSocket, frameIds: string[]) {
     const recipe = createConnectionRecipe({ socket, target: state.target, selectedFrameIds: frameIds });
+    const importedTarget = {
+      ...state.target,
+      socketUrl: recipe.socketUrl,
+      subprotocol: recipe.subprotocol,
+      engine: recipe.selectedEngine,
+      tabOrigin: recipe.tabOrigin,
+    };
+    const socketRecipe = createSavedSocketRecipeFromDiscovery({ socket, target: importedTarget });
+    const messageSet = createSavedMessageSetFromDiscoveredFrames({ socket, selectedFrameIds: frameIds });
+    const queue = createReplayQueue({ socketRecipe, messageSet });
     dispatch({ type: 'import-connection-recipe', recipe });
+    dispatch({ type: 'load-replay-queue', queue });
     dispatch({ type: 'add-evidence', result: createRecipeImportEvidenceRecord(recipe, 'Imported with selected bootstrap frames queued for explicit replay.') });
-  }
-
-  function replayBootstrapRecipe() {
-    const recipe = state.pendingBootstrapRecipe;
-    if (!recipe) return;
-    if (state.status !== 'open') {
-      dispatch({ type: 'set-status', status: 'error', error: 'Connect the imported target before replaying bootstrap frames.' });
-      return;
-    }
-
-    recipe.bootstrapFrames.forEach((frame) => sendBody(frame.body));
-    dispatch({ type: 'add-evidence', result: createBootstrapReplayEvidenceRecord(recipe) });
-    dispatch({ type: 'clear-bootstrap-recipe' });
   }
 
   async function hydrateReplayLibrary() {
@@ -529,24 +618,58 @@ export function App({ surface, loadTabContext, subscribeTabContext, transport = 
   function sendReplayNext() {
     const queue = state.activeReplayQueue;
     if (!queue) return;
-    const next = queue.items.find((item) => item.status !== 'sent' && state.selectedReplayQueueItemIds.includes(item.id)) ?? queue.items.find((item) => item.status !== 'sent');
+    const next = nextSendableReplayItem(queue.items, state.selectedReplayQueueItemIds) ?? queue.items.find((item) => isSendableReplayItem(item) && item.status !== 'sent');
     if (next) sendReplayItems([next]);
   }
 
   function sendReplaySelected() {
     const queue = state.activeReplayQueue;
     if (!queue) return;
-    sendReplayItems(queue.items.filter((item) => item.status !== 'sent' && state.selectedReplayQueueItemIds.includes(item.id)));
+    sendReplayItems(selectedSendableReplayItems(queue.items, state.selectedReplayQueueItemIds));
   }
 
   function sendReplayAll() {
     const queue = state.activeReplayQueue;
     if (!queue) return;
-    sendReplayItems(queue.items.filter((item) => item.status !== 'sent'));
+    startOrderedReplay('ordered');
+  }
+
+  function sendReplayWithWaits() {
+    startOrderedReplay('ordered-with-waits');
+  }
+
+  function sendReplayRow(itemId: string) {
+    const item = state.activeReplayQueue?.items.find((candidate) => candidate.id === itemId);
+    if (item) sendReplayItems([item]);
+  }
+
+  function skipReplayItem(itemId: string) {
+    dispatch({ type: 'skip-replay-queue-item', itemId, skippedAt: new Date().toISOString() });
+  }
+
+  function removeReplayItem(itemId: string) {
+    dispatch({ type: 'remove-replay-queue-item', itemId, removedAt: new Date().toISOString() });
+  }
+
+  function skipWaitingCheckpoint() {
+    const waitingId = state.activeReplayRun?.waitingCheckpointId ?? state.activeReplayQueue?.waitingCheckpointId;
+    if (!waitingId) return;
+    skipReplayItem(waitingId);
+  }
+
+  function startOrderedReplay(mode: ReplayRunMode) {
+    const queue = state.activeReplayQueue;
+    if (!queue) return;
+    if (state.status !== 'open') {
+      dispatch({ type: 'set-status', status: 'error', error: 'Connect before replaying the imported transcript.' });
+      return;
+    }
+    dispatch({ type: 'start-replay-run', run: createReplayRun(queue, new Date().toISOString(), mode) });
   }
 
   function sendReplayItems(items: ReplayQueueItem[]) {
-    if (!state.activeReplayQueue || items.length === 0) return;
+    const sendableItems = items.filter(isSendableReplayItem);
+    if (!state.activeReplayQueue || sendableItems.length === 0) return;
     if (state.status !== 'open') {
       dispatch({ type: 'set-status', status: 'error', error: 'Connect before replaying queued messages.' });
       return;
@@ -554,7 +677,7 @@ export function App({ surface, loadTabContext, subscribeTabContext, transport = 
     if (!state.activeReplayRun || state.activeReplayRun.status !== 'running') {
       dispatch({ type: 'start-replay-run', run: createReplayRun(state.activeReplayQueue) });
     }
-    for (const item of items) {
+    for (const item of sendableItems) {
       if (state.status !== 'open') {
         finishReplayRun('partial');
         return;
@@ -573,7 +696,7 @@ export function App({ surface, loadTabContext, subscribeTabContext, transport = 
     const run = state.activeReplayRun;
     if (!queue || !run || run.status !== 'running') return;
     const endedAt = new Date().toISOString();
-    const unsentIds = queue.items.filter((item) => item.status !== 'sent').map((item) => item.id);
+    const unsentIds = queue.items.filter((item) => isSendableReplayItem(item) && item.status !== 'sent' && item.status !== 'skipped' && item.status !== 'removed').map((item) => item.id);
     const status = requestedStatus === 'completed' && unsentIds.length > 0 ? 'partial' : requestedStatus;
     const inboundFrames = state.frames.filter((frame) => frame.direction === 'inbound' && frame.timestamp >= run.startedAt);
     const finalRun = {
@@ -582,6 +705,7 @@ export function App({ surface, loadTabContext, subscribeTabContext, transport = 
       endedAt,
       inboundFrameIds: inboundFrames.map((frame) => frame.id),
       unsentMessageIds: unsentIds,
+      checkpointOutcomes: run.checkpointOutcomes,
     };
     dispatch({ type: 'finish-replay-run', status, endedAt, inboundFrameIds: finalRun.inboundFrameIds });
     dispatch({ type: 'add-evidence', result: createReplayRunEvidenceRecord({ queue, run: finalRun, inboundTranscriptPreviews: inboundFrames.map((frame) => frame.body) }) });
@@ -692,6 +816,17 @@ export function App({ surface, loadTabContext, subscribeTabContext, transport = 
           <input value={state.target.socketUrl} onChange={(event) => dispatch({ type: 'set-target-url', url: event.target.value })} placeholder="wss://example.com/socket" />
         </label>
 
+        <label className="subprotocol-field">
+          <span className="label">Subprotocol</span>
+          <input
+            aria-label="Subprotocol"
+            value={state.target.subprotocol}
+            disabled={socketIsActive}
+            onChange={(event) => dispatch({ type: 'set-target-subprotocol', subprotocol: event.target.value })}
+            placeholder="optional"
+          />
+        </label>
+
         <label className="test-endpoint-field">
           <span className="label">Test</span>
           <select
@@ -741,6 +876,19 @@ export function App({ surface, loadTabContext, subscribeTabContext, transport = 
           </div>
         ) : null}
 
+        <div className="context-field">
+          <span className="label">Context</span>
+          <button
+            type="button"
+            className={transportContextOpen ? 'context-toggle active' : 'context-toggle'}
+            onClick={() => setTransportContextOpen((open) => !open)}
+            aria-expanded={transportContextOpen}
+            aria-controls="transport-context-panel"
+          >
+            <FileText size={14} /> Context
+          </button>
+        </div>
+
         <div className="connection-field" aria-label="Connection controls">
           <div className="connection-controls">
             <button type="button" className={`socket-toggle ${socketIsActive ? 'danger' : 'primary'}`} onClick={socketIsActive ? stop : connect} title={socketIsActive ? 'Stop' : 'Connect'} aria-label={socketIsActive ? 'Stop WebSocket' : 'Connect WebSocket'}>
@@ -750,6 +898,8 @@ export function App({ surface, loadTabContext, subscribeTabContext, transport = 
             <ConnectionStatusIcon status={state.status} />
           </div>
         </div>
+
+        {transportContextOpen ? <TransportContextPanel target={state.target} context={state.transportContext} /> : null}
       </section>
 
       <p className={state.error ? 'error-line' : 'error-line empty'} aria-live="polite">
@@ -790,17 +940,19 @@ export function App({ surface, loadTabContext, subscribeTabContext, transport = 
           onResend={resendSelected}
           onCopy={copySelected}
           onClear={() => dispatch({ type: 'clear-frames' })}
-          pendingBootstrapRecipe={state.pendingBootstrapRecipe}
           activeReplayQueue={state.activeReplayQueue}
           selectedReplayQueueItemIds={state.selectedReplayQueueItemIds}
           connectionStatus={state.status}
-          onReplayBootstrap={replayBootstrapRecipe}
-          onClearBootstrap={() => dispatch({ type: 'clear-bootstrap-recipe' })}
           onToggleReplayItem={(itemId, selected) => dispatch({ type: 'toggle-replay-queue-item', itemId, selected })}
           onEditReplayItem={editReplayItem}
           onSendReplayNext={sendReplayNext}
           onSendReplaySelected={sendReplaySelected}
           onSendReplayAll={sendReplayAll}
+          onSendReplayWithWaits={sendReplayWithWaits}
+          onSendReplayRow={sendReplayRow}
+          onSkipReplayItem={skipReplayItem}
+          onRemoveReplayItem={removeReplayItem}
+          onSkipWaitingCheckpoint={skipWaitingCheckpoint}
           onFinishReplayRun={() => finishReplayRun('completed')}
           onCancelReplayRun={() => finishReplayRun('cancelled')}
           onClearReplayQueue={() => dispatch({ type: 'clear-replay-queue' })}
@@ -891,6 +1043,98 @@ function ConnectionStatusIcon(props: { status: ConnectionStatus }) {
   );
 }
 
+function TransportContextPanel(props: { target: TargetContext; context: TransportContextState }) {
+  const handshake = props.context.handshake;
+  return (
+    <section id="transport-context-panel" className="transport-context-panel" aria-label="Transport context">
+      <div className="transport-context-summary">
+        <div className="detail-heading">
+          <FileText size={15} />
+          <h2>Transport Context</h2>
+          <span className={handshake.observed ? 'mode-pill mode-passive' : 'mode-pill'}>{handshake.observed ? 'observed' : 'unobserved'}</span>
+        </div>
+        <dl className="transport-context-grid">
+          <div>
+            <dt>Source</dt>
+            <dd>{transportSourceLabel(props.context)}</dd>
+          </div>
+          <div>
+            <dt>Socket URL</dt>
+            <dd>{props.target.socketUrl || 'not set'}</dd>
+          </div>
+          <div>
+            <dt>Engine</dt>
+            <dd>{props.target.engine}</dd>
+          </div>
+          <div>
+            <dt>Subprotocol</dt>
+            <dd>{props.target.subprotocol || 'none set'}</dd>
+          </div>
+          <div>
+            <dt>Session</dt>
+            <dd>{authAssumptionLabel(props.target.authAssumption)}</dd>
+          </div>
+          <div>
+            <dt>Handshake</dt>
+            <dd>{handshake.observed ? handshakeLine(handshake) : 'unobserved'}</dd>
+          </div>
+        </dl>
+      </div>
+      <div className="transport-header-context">
+        <p className="controlled-note">Observed handshake headers are read-only evidence. Browser WebSocket cannot replay arbitrary custom request headers.</p>
+        <div>
+          <span className="label">Request headers</span>
+          <TransportHeaderList headers={handshake.requestHeaders} />
+        </div>
+        <div>
+          <span className="label">Response headers</span>
+          <TransportHeaderList headers={handshake.responseHeaders} />
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function TransportHeaderList(props: { headers: RedactedHeader[] }) {
+  if (props.headers.length === 0) return <span className="muted-line">none observed</span>;
+  return (
+    <ul className="transport-header-list">
+      {props.headers.map((header) => {
+        const usage = handshakeHeaderUsage(header.name);
+        return (
+          <li key={header.name}>
+            <span>{header.name}</span>
+            <code>{header.value}</code>
+            <small className={`header-usage header-usage-${usage.role}`} title={usage.description}>
+              {usage.label}
+            </small>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+function transportSourceLabel(context: TransportContextState): string {
+  if (context.source === 'discovery') return context.sourceRequestId ? `discovered request ${context.sourceRequestId}` : 'discovered socket';
+  if (context.source === 'saved-recipe') return context.sourceRequestId ? `saved recipe from request ${context.sourceRequestId}` : 'saved recipe';
+  return 'manual';
+}
+
+function authAssumptionLabel(value: TargetContext['authAssumption']): string {
+  if (value === 'page-session') return 'Page session';
+  if (value === 'manual-token') return 'Manual token';
+  if (value === 'none') return 'None';
+  return 'Unknown';
+}
+
+function handshakeLine(handshake: HandshakeSummary): string {
+  const statusLabel = handshake.status === null ? 'status unknown' : `${handshake.status} ${handshake.statusText}`.trim();
+  const subprotocol = observedHandshakeSubprotocol(handshake);
+  const extensions = observedHandshakeExtensions(handshake);
+  return [statusLabel, subprotocol, extensions].filter(Boolean).join(' / ');
+}
+
 function DebuggerView(props: {
   frames: FrameRecord[];
   selectedFrame: FrameRecord | null;
@@ -905,17 +1149,19 @@ function DebuggerView(props: {
   onResend: () => void;
   onCopy: () => void;
   onClear: () => void;
-  pendingBootstrapRecipe: ConnectionRecipe | null;
   activeReplayQueue: ReplayQueue | null;
   selectedReplayQueueItemIds: string[];
   connectionStatus: ConnectionStatus;
-  onReplayBootstrap: () => void;
-  onClearBootstrap: () => void;
   onToggleReplayItem: (itemId: string, selected: boolean) => void;
   onEditReplayItem: (itemId: string, body: string) => void;
   onSendReplayNext: () => void;
   onSendReplaySelected: () => void;
   onSendReplayAll: () => void;
+  onSendReplayWithWaits: () => void;
+  onSendReplayRow: (itemId: string) => void;
+  onSkipReplayItem: (itemId: string) => void;
+  onRemoveReplayItem: (itemId: string) => void;
+  onSkipWaitingCheckpoint: () => void;
   onFinishReplayRun: () => void;
   onCancelReplayRun: () => void;
   onClearReplayQueue: () => void;
@@ -951,31 +1197,20 @@ function DebuggerView(props: {
           <span>{outboundCount} outbound</span>
         </div>
 
-        <div className="frame-header" aria-hidden="true">
-          <span>Dir</span>
-          <span>Time</span>
-          <span>Length</span>
-          <span>Wire</span>
-          <span>Data Preview</span>
-        </div>
-
-        <ol className="frame-list" aria-label="Frame stream">
-          {props.frames.length === 0 ? (
-            <li className="empty-state">No frames captured.</li>
-          ) : (
-            props.frames.map((frame) => (
-              <li key={frame.id}>
-                <button type="button" className={props.selectedFrame?.id === frame.id ? 'selected frame-row' : 'frame-row'} onClick={() => props.onSelect(frame.id)}>
-                  <DirectionMarker direction={frame.direction} />
-                  <time className="frame-time">{formatFrameTime(frame.timestamp)}</time>
-                  <span className="frame-size">{formatFrameBytes(frame)}</span>
-                  <span className={`frame-wire ${frame.metadata.payloadKind === 'binary' ? 'binary' : 'text'}`}>{frame.metadata.payloadKind === 'binary' ? 'binary' : 'text'}</span>
-                  <span className="frame-body">{frame.body}</span>
-                </button>
-              </li>
-            ))
-          )}
-        </ol>
+        <FrameStreamTable
+          rows={props.frames.map((frame) => ({
+            id: frame.id,
+            direction: frame.direction,
+            timestamp: frame.timestamp,
+            payloadKind: frame.metadata.payloadKind === 'binary' ? 'binary' : 'text',
+            payloadLength: Number.isFinite(Number(frame.metadata.payloadLength)) ? Number(frame.metadata.payloadLength) : new Blob([frame.body]).size,
+            body: frame.body,
+            selected: props.selectedFrame?.id === frame.id,
+          }))}
+          ariaLabel="Frame stream"
+          emptyText="No frames captured."
+          onSelect={props.onSelect}
+        />
       </div>
 
       <div className="editor-column">
@@ -1021,22 +1256,6 @@ function DebuggerView(props: {
           <textarea aria-label="Payload editor" value={props.editorBody} onChange={(event) => props.onEditor(event.target.value)} placeholder="Enter JSON or text payload" />
         )}
 
-        {props.pendingBootstrapRecipe ? (
-          <div className="bootstrap-queue" aria-label="Queued bootstrap replay">
-            <div>
-              <span className="label">Bootstrap Queue</span>
-              <strong>{props.pendingBootstrapRecipe.bootstrapFrames.length} selected frame{props.pendingBootstrapRecipe.bootstrapFrames.length === 1 ? '' : 's'}</strong>
-              <span>Source request {props.pendingBootstrapRecipe.sourceRequestId}</span>
-            </div>
-            <button type="button" className="primary-action" onClick={props.onReplayBootstrap} disabled={props.connectionStatus !== 'open'}>
-              <Upload size={16} /> Replay bootstrap
-            </button>
-            <button type="button" onClick={props.onClearBootstrap}>
-              <Eraser size={16} /> Clear queue
-            </button>
-          </div>
-        ) : null}
-
         {props.activeReplayQueue ? (
           <ReplayQueuePanel
             queue={props.activeReplayQueue}
@@ -1047,6 +1266,11 @@ function DebuggerView(props: {
             onSendNext={props.onSendReplayNext}
             onSendSelected={props.onSendReplaySelected}
             onSendAll={props.onSendReplayAll}
+            onSendWithWaits={props.onSendReplayWithWaits}
+            onSendItem={props.onSendReplayRow}
+            onSkipItem={props.onSkipReplayItem}
+            onRemoveItem={props.onRemoveReplayItem}
+            onSkipWaiting={props.onSkipWaitingCheckpoint}
             onFinish={props.onFinishReplayRun}
             onCancel={props.onCancelReplayRun}
             onClear={props.onClearReplayQueue}
@@ -1063,15 +1287,6 @@ function DebuggerView(props: {
         </div>
       </div>
     </section>
-  );
-}
-
-function DirectionMarker(props: { direction: 'inbound' | 'outbound' }) {
-  const Icon = props.direction === 'inbound' ? ArrowDownLeft : ArrowUpRight;
-  return (
-    <span className={`direction-marker ${props.direction}`} title={props.direction} aria-label={props.direction}>
-      <Icon size={13} strokeWidth={2.4} />
-    </span>
   );
 }
 
@@ -1242,7 +1457,6 @@ function evidenceTitle(record: EvidenceRecord): string {
   if (record.kind === 'security-test') return record.testId;
   if (record.kind === 'observed-socket') return `observed ${record.sourceRequestId}`;
   if (record.kind === 'recipe-import') return `recipe ${record.sourceRequestId}`;
-  if (record.kind === 'bootstrap-replay') return `bootstrap ${record.sourceRequestId}`;
   return `replay ${record.replayRunId}`;
 }
 
@@ -1257,8 +1471,7 @@ function evidenceSecondaryPreview(record: EvidenceRecord): string {
   if (record.kind === 'security-test') return record.responsePreview;
   if (record.kind === 'observed-socket') return `${record.frameCounts.outbound} outbound / ${record.frameCounts.inbound} inbound`;
   if (record.kind === 'recipe-import') return `${record.selectedEngine} import`;
-  if (record.kind === 'replay-run') return `${record.status} replay run`;
-  return `${record.replayedFrameCount} replayed`;
+  return `${record.status} replay run`;
 }
 
 function readableError(error: unknown): string {
@@ -1269,7 +1482,16 @@ function compactOrigin(origin: string): string {
   return origin.replace(/^https?:\/\//, '');
 }
 
-function postPageCommand(message: { type: 'connect'; url: string; protocol?: string } | { type: 'send'; body: string } | { type: 'stop' }): void {
+function parseSubprotocolInput(value: string): string | string[] | undefined {
+  const protocols = value
+    .split(',')
+    .map((protocol) => protocol.trim())
+    .filter(Boolean);
+  if (protocols.length === 0) return undefined;
+  return protocols.length === 1 ? protocols[0] : protocols;
+}
+
+function postPageCommand(message: { type: 'connect'; url: string; protocol?: string | string[] } | { type: 'send'; body: string } | { type: 'stop' }): void {
   window.postMessage({ source: pageUiSource, ...message }, '*');
 }
 
@@ -1296,13 +1518,6 @@ function contextLabel(surface: AppProps['surface']): string {
   if (surface === 'sidepanel') return 'Persistent side panel';
   if (surface === 'page-overlay') return 'Direct page overlay / MAIN-world socket';
   return 'Active tab popup';
-}
-
-function formatFrameTime(timestamp: string): string {
-  const date = new Date(timestamp);
-  if (Number.isNaN(date.getTime())) return timestamp;
-  const ms = String(date.getMilliseconds()).padStart(3, '0');
-  return `${date.toTimeString().slice(0, 8)}.${ms}`;
 }
 
 function formatFrameBytes(frame: FrameRecord): string {

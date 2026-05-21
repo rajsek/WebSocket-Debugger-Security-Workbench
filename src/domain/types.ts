@@ -9,9 +9,13 @@ export type DiscoveredSocketLifecycle = 'created' | 'handshaking' | 'open' | 'ac
 export type ReplayArtifactSchemaVersion = 1;
 export type ReplayArtifactKind = 'saved-socket-recipe' | 'saved-message-set';
 export type ReplaySourceType = 'discovery' | 'controlled' | 'manual' | 'import';
-export type ReplayQueueItemStatus = 'queued' | 'sent' | 'unsent';
+export type ReplayQueueItemRole = 'sendable' | 'wait-checkpoint' | 'observed-only';
+export type ReplayQueueItemStatus = 'queued' | 'sent' | 'unsent' | 'waiting' | 'matched' | 'timeout' | 'skipped' | 'removed' | 'error';
+export type ReplayCheckpointMode = 'exact' | 'next-inbound';
+export type ReplayRunMode = 'manual' | 'ordered' | 'ordered-with-waits';
 export type ReplayRunStatus = 'running' | 'completed' | 'partial' | 'failed' | 'cancelled';
 export type ReplayLibraryStatus = 'idle' | 'loading' | 'ready' | 'error';
+export type TransportContextSource = 'manual' | 'discovery' | 'saved-recipe';
 
 export interface TargetContext {
   tabId: number | null;
@@ -68,6 +72,13 @@ export interface ObservedFrameSummary {
   redacted: boolean;
 }
 
+export interface BootstrapTranscriptRow extends ObservedFrameSummary {
+  sourceFrameId: string;
+  sourceFrameHash: string;
+  role: ReplayQueueItemRole;
+  checkpointMode: ReplayCheckpointMode;
+}
+
 export interface DiscoveredSocket {
   requestId: string;
   url: string;
@@ -79,6 +90,7 @@ export interface DiscoveredSocket {
     inbound: number;
     outbound: number;
   };
+  bootstrapTranscript: BootstrapTranscriptRow[];
   firstOutboundFrames: ObservedFrameSummary[];
   error: string | null;
   closedAt: string | null;
@@ -113,7 +125,15 @@ export interface ConnectionRecipe {
   tabOrigin: string;
   createdAt: string;
   handshake: HandshakeSummary;
+  bootstrapTranscript: BootstrapTranscriptRow[];
   bootstrapFrames: ObservedFrameSummary[];
+}
+
+export interface TransportContextState {
+  source: TransportContextSource;
+  sourceRequestId: string | null;
+  sourceArtifactId: string | null;
+  handshake: HandshakeSummary;
 }
 
 export interface ReplayArtifactBase {
@@ -145,7 +165,12 @@ export interface SavedReplayMessage {
   payloadLength: number;
   sourceFrameId: string | null;
   sourceFrameHash: string;
+  sourceRequestId?: string | null;
   sourceTimestamp: string | null;
+  direction?: FrameDirection;
+  payloadKind?: 'text' | 'binary';
+  role?: ReplayQueueItemRole;
+  checkpointMode?: ReplayCheckpointMode;
   createdAt: string;
   updatedAt: string;
 }
@@ -157,17 +182,25 @@ export interface SavedMessageSet extends ReplayArtifactBase {
   tabOrigin: string;
   sourceRequestId: string | null;
   messages: SavedReplayMessage[];
+  transcriptRows?: SavedReplayMessage[];
 }
 
 export type SavedReplayArtifact = SavedSocketRecipe | SavedMessageSet;
 
 export interface ReplayQueueItem extends SavedReplayMessage {
+  direction: FrameDirection;
+  payloadKind: 'text' | 'binary';
+  sourceRequestId: string | null;
+  role: ReplayQueueItemRole;
+  checkpointMode: ReplayCheckpointMode;
   status: ReplayQueueItemStatus;
   selected: boolean;
   sentAt: string | null;
   editedAt: string | null;
   originalBody: string;
   originalPreview: string;
+  matchedFrameId: string | null;
+  timeoutAt: string | null;
 }
 
 export interface ReplayQueue {
@@ -179,6 +212,7 @@ export interface ReplayQueue {
   mismatchReason: string | null;
   createdAt: string;
   updatedAt: string;
+  waitingCheckpointId: string | null;
 }
 
 export interface ReplayRun {
@@ -189,12 +223,23 @@ export interface ReplayRun {
   socketUrl: string;
   selectedEngine: EngineMode;
   sourceMismatch: boolean;
+  mode: ReplayRunMode;
+  waitingCheckpointId: string | null;
   startedAt: string;
   endedAt: string | null;
   status: ReplayRunStatus;
   sentMessageIds: string[];
   unsentMessageIds: string[];
   inboundFrameIds: string[];
+  checkpointOutcomes: ReplayCheckpointOutcome[];
+}
+
+export interface ReplayCheckpointOutcome {
+  rowId: string;
+  sourceFrameHash: string;
+  status: 'matched' | 'timeout' | 'skipped';
+  matchedFrameId: string | null;
+  timestamp: string;
 }
 
 export interface SecurityTest {
@@ -257,19 +302,8 @@ export interface RecipeImportEvidenceRecord {
   sourceRequestId: string;
   selectedEngine: EngineMode;
   bootstrapFramePreviews: string[];
+  transcriptFramePreviews: string[];
   note: string;
-}
-
-export interface BootstrapReplayEvidenceRecord {
-  kind: 'bootstrap-replay';
-  id: string;
-  timestamp: string;
-  targetOrigin: string;
-  socketUrl: string;
-  sourceRequestId: string;
-  selectedEngine: EngineMode;
-  bootstrapFramePreviews: string[];
-  replayedFrameCount: number;
 }
 
 export interface ReplayRunEvidenceRecord {
@@ -289,6 +323,9 @@ export interface ReplayRunEvidenceRecord {
   editedMessageCount: number;
   sentMessageCount: number;
   unsentMessageCount: number;
+  skippedRowCount: number;
+  removedRowCount: number;
+  checkpointOutcomes: ReplayCheckpointOutcome[];
   inboundTranscriptPreviews: string[];
 }
 
@@ -296,7 +333,6 @@ export type EvidenceRecord =
   | TestResultRecord
   | ObservedSocketEvidenceRecord
   | RecipeImportEvidenceRecord
-  | BootstrapReplayEvidenceRecord
   | ReplayRunEvidenceRecord;
 
 export type RuntimeCommand =
@@ -328,6 +364,7 @@ export type RuntimeEvent =
 
 export interface SocketState {
   target: TargetContext;
+  transportContext: TransportContextState;
   status: ConnectionStatus;
   frames: FrameRecord[];
   selectedFrameId: string | null;
@@ -340,7 +377,6 @@ export interface SocketState {
   selectedTestId: string;
   discovery: WebSocketCaptureSnapshot;
   selectedDiscoveryRequestId: string | null;
-  pendingBootstrapRecipe: ConnectionRecipe | null;
   replayLibraryStatus: ReplayLibraryStatus;
   replayLibrary: SavedReplayArtifact[];
   replayLibraryError: string | null;
@@ -372,7 +408,6 @@ export type SocketAction =
   | { type: 'set-discovery-snapshot'; snapshot: WebSocketCaptureSnapshot }
   | { type: 'select-discovered-socket'; requestId: string | null }
   | { type: 'import-connection-recipe'; recipe: ConnectionRecipe }
-  | { type: 'clear-bootstrap-recipe' }
   | { type: 'set-replay-library-status'; status: ReplayLibraryStatus; error?: string | null }
   | { type: 'set-replay-library'; artifacts: SavedReplayArtifact[] }
   | { type: 'add-replay-artifact'; artifact: SavedReplayArtifact }
@@ -381,9 +416,14 @@ export type SocketAction =
   | { type: 'load-replay-queue'; queue: ReplayQueue }
   | { type: 'toggle-replay-queue-item'; itemId: string; selected: boolean }
   | { type: 'edit-replay-queue-item'; itemId: string; body: string; preview: string; updatedAt: string }
+  | { type: 'skip-replay-queue-item'; itemId: string; skippedAt: string }
+  | { type: 'remove-replay-queue-item'; itemId: string; removedAt: string }
   | { type: 'clear-replay-queue' }
   | { type: 'start-replay-run'; run: ReplayRun }
   | { type: 'mark-replay-item-sent'; itemId: string; sentAt: string }
+  | { type: 'mark-replay-checkpoint-waiting'; itemId: string; timeoutAt: string }
+  | { type: 'mark-replay-checkpoint-matched'; itemId: string; frameId: string; matchedAt: string }
+  | { type: 'mark-replay-checkpoint-timeout'; itemId: string; timedOutAt: string }
   | { type: 'finish-replay-run'; status: ReplayRunStatus; endedAt: string; inboundFrameIds: string[] }
   | { type: 'set-page-csp-bypass'; enabled: boolean }
   | { type: 'set-csp-header-strip'; enabled: boolean }

@@ -1,6 +1,6 @@
 (() => {
   const marker = '__wsWorkbenchPageEngineReady';
-  const pageWindow = window as unknown as Window & Record<string, boolean | string | WebSocket | undefined>;
+  const pageWindow = window as unknown as Window & Record<string, boolean | string | string[] | WebSocket | undefined>;
   const socketKey = '__wsWorkbenchPageSocket';
   const pendingSocketUrlKey = '__wsWorkbenchPendingSocketUrl';
   const cspBlockedUrlKey = '__wsWorkbenchCspBlockedSocketUrl';
@@ -46,7 +46,7 @@
     }
   });
 
-  function connect(url: string, protocol = ''): void {
+  function connect(url: string, protocol?: string | string[]): void {
     const current = pageWindow[socketKey];
     if (current instanceof WebSocket) current.close();
 
@@ -56,7 +56,8 @@
       pageWindow[pendingSocketUrlKey] = socketUrl;
       pageWindow[cspBlockedUrlKey] = undefined;
 
-      const socket = protocol ? new WebSocket(socketUrl, protocol) : new WebSocket(socketUrl);
+      const protocols = Array.isArray(protocol) && protocol.length === 0 ? undefined : protocol;
+      const socket = protocols ? new WebSocket(socketUrl, protocols) : new WebSocket(socketUrl);
       socket.binaryType = 'arraybuffer';
       pageWindow[socketKey] = socket;
       postStatus('connecting');
@@ -174,12 +175,16 @@
     return `Page CSP blocked ${socketUrl} (${directive}). Page engine sockets obey the host page connect-src policy. Use Extension engine for arbitrary echo hosts, or enable Page CSP bypass for this tab and reconnect.`;
   }
 
-  function isUiMessage(value: unknown): value is { source: string; type: 'connect'; url: string; protocol?: string } | { source: string; type: 'send'; body: string } | { source: string; type: 'stop' } {
+  function isUiMessage(value: unknown): value is { source: string; type: 'connect'; url: string; protocol?: string | string[] } | { source: string; type: 'send'; body: string } | { source: string; type: 'stop' } {
     if (typeof value !== 'object' || value === null) return false;
     const record = value as Record<string, unknown>;
     if (record.source !== uiSource || typeof record.type !== 'string') return false;
-    if (record.type === 'connect') return typeof record.url === 'string' && (!('protocol' in record) || typeof record.protocol === 'string');
+    if (record.type === 'connect') return typeof record.url === 'string' && (!('protocol' in record) || isProtocolInput(record.protocol));
     if (record.type === 'send') return typeof record.body === 'string';
     return record.type === 'stop';
+  }
+
+  function isProtocolInput(value: unknown): value is string | string[] {
+    return typeof value === 'string' || (Array.isArray(value) && value.every((entry) => typeof entry === 'string'));
   }
 })();

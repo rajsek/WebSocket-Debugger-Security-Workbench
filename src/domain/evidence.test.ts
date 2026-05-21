@@ -1,5 +1,4 @@
 import {
-  createBootstrapReplayEvidenceRecord,
   createObservedSocketEvidenceRecord,
   createRecipeImportEvidenceRecord,
   createReplayRunEvidenceRecord,
@@ -48,6 +47,7 @@ describe('evidence redaction', () => {
         responseTime: '2026-05-15T12:00:00.100Z',
       },
       frameCounts: { outbound: 1, inbound: 2 },
+      bootstrapTranscript: [],
       firstOutboundFrames: [
         {
           id: 'boot-1',
@@ -85,20 +85,19 @@ describe('evidence redaction', () => {
       tabOrigin: target.tabOrigin,
       createdAt: '2026-05-15T12:00:02.000Z',
       handshake: socket.handshake,
+      bootstrapTranscript: [],
       bootstrapFrames: socket.firstOutboundFrames,
     };
 
     const markdown = exportEvidenceMarkdown([
       createObservedSocketEvidenceRecord({ socket, snapshot, target }),
       createRecipeImportEvidenceRecord(recipe, 'Imported with selected bootstrap frames queued for explicit replay.'),
-      createBootstrapReplayEvidenceRecord(recipe),
     ]);
 
     expect(markdown).toContain('Kind: observed-runtime-traffic');
     expect(markdown).toContain('Request id: 100.1');
     expect(markdown).toContain('Frames: 1 outbound / 2 inbound');
     expect(markdown).toContain('Kind: recipe-import');
-    expect(markdown).toContain('Kind: bootstrap-replay');
     expect(markdown).toContain('[redacted]');
     expect(markdown).not.toContain('secret-value');
   });
@@ -154,7 +153,12 @@ describe('evidence redaction', () => {
           payloadLength: 41,
           sourceFrameId: 'frame-1',
           sourceFrameHash: 'abc123',
+          sourceRequestId: null,
           sourceTimestamp: '2026-05-16T10:00:01.000Z',
+          direction: 'outbound',
+          payloadKind: 'text',
+          role: 'sendable',
+          checkpointMode: 'exact',
           createdAt: '2026-05-16T10:00:01.000Z',
           updatedAt: '2026-05-16T10:00:02.000Z',
           status: 'sent',
@@ -163,12 +167,15 @@ describe('evidence redaction', () => {
           editedAt: '2026-05-16T10:00:02.000Z',
           originalBody: '{"op":"subscribe"}',
           originalPreview: '{"op":"subscribe"}',
+          matchedFrameId: null,
+          timeoutAt: null,
         },
       ],
       sourceMismatch: true,
       mismatchReason: 'different socket',
       createdAt: '2026-05-16T10:00:00.000Z',
       updatedAt: '2026-05-16T10:00:03.000Z',
+      waitingCheckpointId: null,
     };
     const run: ReplayRun = {
       id: 'run-1',
@@ -178,12 +185,15 @@ describe('evidence redaction', () => {
       socketUrl: 'wss://example.com/socket',
       selectedEngine: 'extension',
       sourceMismatch: true,
+      mode: 'manual',
+      waitingCheckpointId: null,
       startedAt: '2026-05-16T10:00:03.000Z',
       endedAt: '2026-05-16T10:00:04.000Z',
       status: 'partial',
       sentMessageIds: ['message-1'],
       unsentMessageIds: ['message-2'],
       inboundFrameIds: ['in-1'],
+      checkpointOutcomes: [],
     };
 
     const markdown = exportEvidenceMarkdown([

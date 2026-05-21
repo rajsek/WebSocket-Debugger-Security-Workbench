@@ -1,11 +1,14 @@
-import { createEmptyHandshakeSummary } from './discovery';
+import { bootstrapTranscriptForSocket, createEmptyHandshakeSummary, observedHandshakeSubprotocol } from './discovery';
 import { redactSensitive } from './evidence';
 import { isReplayableTextFrame, previewBody } from './frameUtils';
+import { isSendableReplayItem } from './transcript';
 import type {
+  BootstrapTranscriptRow,
   DiscoveredSocket,
   FrameRecord,
   ReplayQueue,
   ReplayQueueItem,
+  ReplayRunMode,
   ReplayRun,
   SavedMessageSet,
   SavedReplayArtifact,
@@ -26,7 +29,7 @@ export function createSavedSocketRecipeFromDiscovery(params: {
   now?: string;
 }): SavedSocketRecipe {
   const now = params.now ?? new Date().toISOString();
-  const subprotocol = params.socket.handshake.protocol;
+  const subprotocol = observedHandshakeSubprotocol(params.socket.handshake);
   return {
     schemaVersion: replayArtifactSchemaVersion,
     kind: 'saved-socket-recipe',
@@ -79,6 +82,8 @@ export function createSavedMessageSetFromDiscoveredFrames(params: {
 }): SavedMessageSet {
   const now = params.now ?? new Date().toISOString();
   const selected = new Set(params.selectedFrameIds);
+  const selectedTranscript = bootstrapTranscriptForSocket(params.socket).filter((row) => selected.has(row.id));
+  const transcriptRows = selectedTranscript.slice(0, maxReplayMessagesPerSet).map((row) => createSavedReplayMessageFromTranscriptRow(row, now));
   return {
     schemaVersion: replayArtifactSchemaVersion,
     kind: 'saved-message-set',
@@ -90,17 +95,8 @@ export function createSavedMessageSetFromDiscoveredFrames(params: {
     socketUrl: params.socket.url,
     tabOrigin: 'unknown',
     sourceRequestId: params.socket.requestId,
-    messages: params.socket.firstOutboundFrames
-      .filter((frame) => frame.payloadKind === 'text' && frame.direction === 'outbound' && selected.has(frame.id))
-      .slice(0, maxReplayMessagesPerSet)
-      .map((frame) =>
-        createSavedReplayMessage({
-          body: frame.body,
-          sourceFrameId: frame.id,
-          sourceTimestamp: frame.timestamp,
-          now,
-        }),
-      ),
+    messages: transcriptRows.filter((message) => message.role === 'sendable' && message.direction === 'outbound' && message.payloadKind === 'text'),
+    transcriptRows,
   };
 }
 
@@ -131,7 +127,11 @@ export function createSavedMessageSetFromControlledFrames(params: {
         createSavedReplayMessage({
           body: frame.body,
           sourceFrameId: frame.id,
+          sourceRequestId: null,
           sourceTimestamp: frame.timestamp,
+          direction: 'outbound',
+          payloadKind: 'text',
+          role: 'sendable',
           now,
         }),
       ),
@@ -153,7 +153,10 @@ export function createReplayQueue(params: {
     mismatchReason,
     createdAt: now,
     updatedAt: now,
-    items: params.messageSet.messages.map((message) => createQueueItem(message)),
+    waitingCheckpointId: null,
+    items: (params.messageSet.transcriptRows && params.messageSet.transcriptRows.length > 0 ? params.messageSet.transcriptRows : params.messageSet.messages).map((message) =>
+      createQueueItem(message),
+    ),
   };
 }
 
@@ -162,7 +165,7 @@ export function editReplayQueueItem(queue: ReplayQueue, itemId: string, body: st
     ...queue,
     updatedAt: now,
     items: queue.items.map((item) =>
-      item.id === itemId
+      item.id === itemId && isSendableReplayItem(item)
         ? {
             ...item,
             body,
@@ -177,7 +180,16 @@ export function editReplayQueueItem(queue: ReplayQueue, itemId: string, body: st
   };
 }
 
-export function createReplayRun(queue: ReplayQueue, now = new Date().toISOString()): ReplayRun {
+export function skipReplayQueueItem(queue: ReplayQueue, itemId: string, now = new Date().toISOString()): ReplayQueue {
+  return updateQueueItemStatus(queue, itemId, 'skipped', now);
+}
+
+export function removeReplayQueueItem(queue: ReplayQueue, itemId: string, now = new Date().toISOString()): ReplayQueue {
+  return updateQueueItemStatus(queue, itemId, 'removed', now);
+}
+
+export function createReplayRun(queue: ReplayQueue, now = new Date().toISOString(), mode: ReplayRunMode = 'manual'): ReplayRun {
+  const sendableUnsent = queue.items.filter((item) => isSendableReplayItem(item) && item.status !== 'sent');
   return {
     id: crypto.randomUUID(),
     queueId: queue.id,
@@ -186,12 +198,15 @@ export function createReplayRun(queue: ReplayQueue, now = new Date().toISOString
     socketUrl: queue.socketRecipe.socketUrl,
     selectedEngine: queue.socketRecipe.selectedEngine,
     sourceMismatch: queue.sourceMismatch,
+    mode,
+    waitingCheckpointId: null,
     startedAt: now,
     endedAt: null,
     status: 'running',
     sentMessageIds: [],
-    unsentMessageIds: queue.items.filter((item) => item.status !== 'sent').map((item) => item.id),
+    unsentMessageIds: sendableUnsent.map((item) => item.id),
     inboundFrameIds: [],
+    checkpointOutcomes: [],
   };
 }
 
@@ -234,7 +249,11 @@ export function assertReplayArtifactSize(artifact: SavedReplayArtifact): void {
 function createSavedReplayMessage(params: {
   body: string;
   sourceFrameId: string | null;
+  sourceRequestId: string | null;
   sourceTimestamp: string | null;
+  direction: 'inbound' | 'outbound';
+  payloadKind: 'text' | 'binary';
+  role: ReplayQueueItem['role'];
   now: string;
 }): SavedReplayMessage {
   return {
@@ -244,21 +263,64 @@ function createSavedReplayMessage(params: {
     payloadLength: params.body.length,
     sourceFrameId: params.sourceFrameId,
     sourceFrameHash: stablePayloadHash(params.body),
+    sourceRequestId: params.sourceRequestId,
     sourceTimestamp: params.sourceTimestamp,
+    direction: params.direction,
+    payloadKind: params.payloadKind,
+    role: params.role,
+    checkpointMode: 'exact',
     createdAt: params.now,
     updatedAt: params.now,
   };
 }
 
+function createSavedReplayMessageFromTranscriptRow(row: BootstrapTranscriptRow, now: string): SavedReplayMessage {
+  return {
+    id: row.id,
+    body: row.body,
+    preview: row.preview,
+    payloadLength: row.payloadLength,
+    sourceFrameId: row.sourceFrameId,
+    sourceFrameHash: row.sourceFrameHash,
+    sourceRequestId: row.requestId,
+    sourceTimestamp: row.timestamp,
+    direction: row.direction,
+    payloadKind: row.payloadKind,
+    role: row.role,
+    checkpointMode: row.checkpointMode,
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
 function createQueueItem(message: SavedReplayMessage): ReplayQueueItem {
+  const direction = message.direction ?? 'outbound';
+  const payloadKind = message.payloadKind ?? 'text';
+  const role = message.role ?? (direction === 'outbound' && payloadKind === 'text' ? 'sendable' : direction === 'inbound' && payloadKind === 'text' ? 'wait-checkpoint' : 'observed-only');
   return {
     ...message,
-    status: 'queued',
-    selected: true,
+    direction,
+    payloadKind,
+    sourceRequestId: message.sourceRequestId ?? null,
+    role,
+    checkpointMode: message.checkpointMode ?? 'exact',
+    status: role === 'observed-only' ? 'skipped' : 'queued',
+    selected: role !== 'observed-only',
     sentAt: null,
     editedAt: null,
     originalBody: message.body,
     originalPreview: message.preview,
+    matchedFrameId: null,
+    timeoutAt: null,
+  };
+}
+
+function updateQueueItemStatus(queue: ReplayQueue, itemId: string, status: ReplayQueueItem['status'], now: string): ReplayQueue {
+  return {
+    ...queue,
+    updatedAt: now,
+    waitingCheckpointId: queue.waitingCheckpointId === itemId && status !== 'waiting' ? null : queue.waitingCheckpointId,
+    items: queue.items.map((item) => (item.id === itemId ? { ...item, status, updatedAt: now } : item)),
   };
 }
 
@@ -286,6 +348,11 @@ function validateMessageSet(record: Record<string, unknown>): SavedMessageSet {
   if (!Array.isArray(record.messages)) throw new Error('Message set messages must be an array.');
   if (record.messages.length > maxReplayMessagesPerSet) throw new Error('Message set exceeds the v1 message limit.');
   record.messages.forEach(validateReplayMessage);
+  if ('transcriptRows' in record) {
+    if (!Array.isArray(record.transcriptRows)) throw new Error('Message set transcript rows must be an array.');
+    if (record.transcriptRows.length > maxReplayMessagesPerSet) throw new Error('Message set transcript exceeds the v1 message limit.');
+    record.transcriptRows.forEach(validateReplayMessage);
+  }
   return record as unknown as SavedMessageSet;
 }
 
@@ -300,6 +367,11 @@ function validateReplayMessage(value: unknown): void {
   if (typeof record.payloadLength !== 'number') throw new Error('Replay message payload length is invalid.');
   if (typeof record.sourceFrameId !== 'string' && record.sourceFrameId !== null) throw new Error('Replay message source frame id is invalid.');
   if (typeof record.sourceTimestamp !== 'string' && record.sourceTimestamp !== null) throw new Error('Replay message source timestamp is invalid.');
+  if ('sourceRequestId' in record && typeof record.sourceRequestId !== 'string' && record.sourceRequestId !== null) throw new Error('Replay message source request id is invalid.');
+  if ('direction' in record && record.direction !== 'inbound' && record.direction !== 'outbound') throw new Error('Replay message direction is invalid.');
+  if ('payloadKind' in record && record.payloadKind !== 'text' && record.payloadKind !== 'binary') throw new Error('Replay message payload kind is invalid.');
+  if ('role' in record && record.role !== 'sendable' && record.role !== 'wait-checkpoint' && record.role !== 'observed-only') throw new Error('Replay message role is invalid.');
+  if ('checkpointMode' in record && record.checkpointMode !== 'exact' && record.checkpointMode !== 'next-inbound') throw new Error('Replay message checkpoint mode is invalid.');
 }
 
 function isHandshake(value: unknown): boolean {

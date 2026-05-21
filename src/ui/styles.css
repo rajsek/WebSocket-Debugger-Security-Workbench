@@ -231,12 +231,18 @@ code {
   min-width: 220px;
 }
 
+.subprotocol-field {
+  flex: 0 1 176px;
+  min-width: 142px;
+}
+
 .test-endpoint-field {
   flex: 0 0 122px;
   min-width: 112px;
 }
 
 .url-field input,
+.subprotocol-field input,
 .test-endpoint-field select,
 .frame-strip input,
 .test-detail input {
@@ -267,6 +273,134 @@ code {
 .csp-bypass-toggle.active {
   background: rgba(245, 158, 11, 0.16);
   border-color: rgba(245, 158, 11, 0.48);
+  color: #fbbf24;
+}
+
+.context-field {
+  display: grid;
+  flex: 0 0 94px;
+  gap: 2px;
+}
+
+.context-toggle {
+  font-size: 12px;
+  height: 32px;
+  padding: 0 8px;
+}
+
+.context-toggle.active {
+  background: rgba(14, 165, 233, 0.14);
+  border-color: rgba(56, 189, 248, 0.48);
+  color: #7dd3fc;
+}
+
+.transport-context-panel {
+  background: #111827;
+  border: 1px solid #1e293b;
+  border-radius: 8px;
+  display: grid;
+  flex: 1 1 100%;
+  gap: 10px;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
+  min-width: 0;
+  padding: 10px;
+}
+
+.transport-context-summary,
+.transport-header-context {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.transport-context-panel .detail-heading h2 {
+  flex: 1;
+  font-size: 13px;
+  margin: 0;
+}
+
+.transport-context-grid,
+.replay-load-preview dl {
+  display: grid;
+  gap: 7px 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin: 0;
+  min-width: 0;
+}
+
+.transport-context-grid div,
+.replay-load-preview dl div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.transport-context-grid dt,
+.replay-load-preview dt {
+  color: #94a3b8;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.transport-context-grid dd,
+.replay-load-preview dd {
+  color: #e5edf6;
+  margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.transport-header-list {
+  display: grid;
+  gap: 5px;
+  list-style: none;
+  margin: 0;
+  min-width: 0;
+  padding: 0;
+}
+
+.transport-header-list li {
+  display: grid;
+  gap: 5px;
+  grid-template-columns: 132px minmax(0, 1fr) minmax(104px, max-content);
+  min-width: 0;
+}
+
+.transport-header-list span {
+  color: #cbd5e1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.header-usage {
+  align-self: center;
+  border: 1px solid #334155;
+  border-radius: 999px;
+  color: #94a3b8;
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1;
+  min-width: 0;
+  overflow: hidden;
+  padding: 4px 7px;
+  text-align: center;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.header-usage-constructor-subprotocol {
+  border-color: rgba(56, 189, 248, 0.45);
+  color: #7dd3fc;
+}
+
+.header-usage-browser-managed {
+  border-color: rgba(251, 191, 36, 0.4);
   color: #fbbf24;
 }
 
@@ -517,6 +651,75 @@ code {
   padding: 6px 12px;
   text-align: left;
   width: 100%;
+}
+
+.transcript-stream-pane {
+  border: 1px solid #1e293b;
+  border-radius: 6px;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 170px;
+}
+
+.transcript-stream-pane .frame-header,
+.transcript-stream-pane .frame-row {
+  grid-template-columns: 36px 86px 58px 84px minmax(90px, 1fr) minmax(260px, 1.35fr);
+}
+
+.discover-transcript-pane {
+  min-height: 190px;
+}
+
+.discover-transcript-pane .frame-row-actions {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.discover-transcript-select {
+  justify-content: start;
+}
+
+.discover-transcript-select small {
+  color: #64748b;
+}
+
+.transcript-frame-row {
+  align-items: start;
+}
+
+.frame-row-actions {
+  align-items: start;
+  display: grid;
+  gap: 6px;
+  grid-template-columns: minmax(86px, 0.6fr) minmax(150px, 1fr) repeat(3, auto);
+  min-width: 0;
+}
+
+.frame-row-actions textarea {
+  min-height: 42px;
+  padding: 6px;
+  resize: vertical;
+}
+
+.transcript-select {
+  align-items: center;
+  color: #94a3b8;
+  display: flex;
+  font-size: 11px;
+  gap: 5px;
+  min-width: 0;
+}
+
+.transcript-readonly {
+  align-self: stretch;
+  background: #0b1120;
+  border: 1px solid #1e293b;
+  border-radius: 6px;
+  color: #94a3b8;
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  padding: 6px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .frame-row:hover:not(:disabled) {
@@ -949,8 +1152,7 @@ code {
   text-transform: uppercase;
 }
 
-.socket-list,
-.bootstrap-list {
+.socket-list {
   list-style: none;
   margin: 0;
   min-height: 0;
@@ -1070,7 +1272,7 @@ code {
 .header-list li {
   display: grid;
   gap: 5px;
-  grid-template-columns: 150px minmax(0, 1fr);
+  grid-template-columns: 150px minmax(0, 1fr) minmax(104px, max-content);
   min-width: 0;
 }
 
@@ -1081,31 +1283,7 @@ code {
   text-overflow: ellipsis;
 }
 
-.bootstrap-list {
-  display: grid;
-  gap: 6px;
-}
-
-.bootstrap-list li {
-  background: #111827;
-  border: 1px solid #1e293b;
-  border-radius: 6px;
-  padding: 8px;
-}
-
-.bootstrap-list label {
-  align-items: center;
-  display: grid;
-  gap: 7px;
-  grid-template-columns: auto 116px minmax(0, 1fr);
-}
-
-.bootstrap-list input {
-  min-height: 0;
-}
-
-.discover-actions,
-.bootstrap-queue {
+.discover-actions {
   align-items: center;
   display: flex;
   flex-wrap: wrap;
@@ -1127,31 +1305,6 @@ code {
   color: #94a3b8;
   font-size: 12px;
   margin: 0;
-}
-
-.bootstrap-queue {
-  background: #111827;
-  border-top: 1px solid #1e293b;
-  padding: 8px 10px;
-}
-
-.bootstrap-queue > div {
-  display: grid;
-  flex: 1 1 180px;
-  gap: 2px;
-  min-width: 0;
-}
-
-.bootstrap-queue strong,
-.bootstrap-queue span:last-child {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.bootstrap-queue span:last-child {
-  color: #94a3b8;
-  font-size: 12px;
 }
 
 .replay-area {
@@ -1214,6 +1367,16 @@ code {
 .replay-card textarea {
   min-height: 78px;
   resize: vertical;
+}
+
+.replay-load-preview {
+  background: #0b1120;
+  border: 1px solid #1e293b;
+  border-radius: 6px;
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px;
 }
 
 .replay-artifact-list,
@@ -1367,8 +1530,10 @@ code {
 
   .target-block,
   .url-field,
+  .subprotocol-field,
   .test-endpoint-field,
-  .engine-field {
+  .engine-field,
+  .context-field {
     min-width: 0;
   }
 
@@ -1391,6 +1556,25 @@ code {
     grid-column: 2;
     grid-row: 3;
     width: 116px;
+  }
+
+  .subprotocol-field {
+    grid-column: 1;
+  }
+
+  .context-field {
+    grid-column: 2;
+    width: 116px;
+  }
+
+  .transport-context-panel {
+    grid-column: 1 / -1;
+    grid-template-columns: 1fr;
+  }
+
+  .transport-context-grid,
+  .replay-load-preview dl {
+    grid-template-columns: 1fr;
   }
 
   .connection-field {
@@ -1459,8 +1643,11 @@ code {
     border-right: 0;
   }
 
-  .header-list li,
-  .bootstrap-list label {
+  .header-list li {
+    grid-template-columns: 1fr;
+  }
+
+  .transport-header-list li {
     grid-template-columns: 1fr;
   }
 

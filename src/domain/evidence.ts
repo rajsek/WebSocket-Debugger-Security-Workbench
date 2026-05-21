@@ -1,6 +1,6 @@
 import { previewBody } from './frameUtils';
+import { observedHandshakeExtensions, observedHandshakeSubprotocol } from './discovery';
 import type {
-  BootstrapReplayEvidenceRecord,
   ConnectionRecipe,
   DiscoveredSocket,
   EvidenceRecord,
@@ -85,21 +85,8 @@ export function createRecipeImportEvidenceRecord(recipe: ConnectionRecipe, note:
     sourceRequestId: recipe.sourceRequestId,
     selectedEngine: recipe.selectedEngine,
     bootstrapFramePreviews: recipe.bootstrapFrames.map((frame) => frame.preview),
+    transcriptFramePreviews: (recipe.bootstrapTranscript ?? recipe.bootstrapFrames).map((frame) => frame.preview),
     note,
-  };
-}
-
-export function createBootstrapReplayEvidenceRecord(recipe: ConnectionRecipe): BootstrapReplayEvidenceRecord {
-  return {
-    kind: 'bootstrap-replay',
-    id: crypto.randomUUID(),
-    timestamp: new Date().toISOString(),
-    targetOrigin: recipe.tabOrigin,
-    socketUrl: recipe.socketUrl,
-    sourceRequestId: recipe.sourceRequestId,
-    selectedEngine: recipe.selectedEngine,
-    bootstrapFramePreviews: recipe.bootstrapFrames.map((frame) => frame.preview),
-    replayedFrameCount: recipe.bootstrapFrames.length,
   };
 }
 
@@ -109,6 +96,8 @@ export function createReplayRunEvidenceRecord(params: {
   inboundTranscriptPreviews: string[];
 }): ReplayRunEvidenceRecord {
   const sentItems = params.queue.items.filter((item) => params.run.sentMessageIds.includes(item.id));
+  const skippedRows = params.queue.items.filter((item) => item.status === 'skipped');
+  const removedRows = params.queue.items.filter((item) => item.status === 'removed');
   return {
     kind: 'replay-run',
     id: crypto.randomUUID(),
@@ -126,6 +115,9 @@ export function createReplayRunEvidenceRecord(params: {
     editedMessageCount: sentItems.filter((item) => item.editedAt !== null).length,
     sentMessageCount: params.run.sentMessageIds.length,
     unsentMessageCount: params.run.unsentMessageIds.length,
+    skippedRowCount: skippedRows.length,
+    removedRowCount: removedRows.length,
+    checkpointOutcomes: params.run.checkpointOutcomes ?? [],
     inboundTranscriptPreviews: params.inboundTranscriptPreviews.map((body) => previewBody(redactSensitive(body))),
   };
 }
@@ -176,21 +168,8 @@ export function exportEvidenceMarkdown(records: EvidenceRecord[]): string {
       lines.push(`- Request id: ${record.sourceRequestId}`);
       lines.push(`- Engine: ${record.selectedEngine}`);
       lines.push(`- Bootstrap previews: ${record.bootstrapFramePreviews.length > 0 ? record.bootstrapFramePreviews.join(' | ') : 'none selected'}`);
+      if ((record.transcriptFramePreviews ?? []).length > 0) lines.push(`- Transcript previews: ${record.transcriptFramePreviews.join(' | ')}`);
       lines.push(`- Note: ${record.note}`);
-      lines.push('');
-      continue;
-    }
-
-    if (record.kind === 'bootstrap-replay') {
-      lines.push(`## Bootstrap replay ${record.sourceRequestId}`);
-      lines.push(`- Kind: bootstrap-replay`);
-      lines.push(`- Time: ${record.timestamp}`);
-      lines.push(`- Target: ${record.targetOrigin}`);
-      lines.push(`- Socket: ${record.socketUrl}`);
-      lines.push(`- Request id: ${record.sourceRequestId}`);
-      lines.push(`- Engine: ${record.selectedEngine}`);
-      lines.push(`- Replayed frames: ${record.replayedFrameCount}`);
-      lines.push(`- Bootstrap previews: ${record.bootstrapFramePreviews.join(' | ')}`);
       lines.push('');
       continue;
     }
@@ -207,9 +186,12 @@ export function exportEvidenceMarkdown(records: EvidenceRecord[]): string {
     lines.push(`- Source mismatch: ${record.sourceMismatch ? 'yes' : 'no'}`);
     lines.push(`- Sent messages: ${record.sentMessageCount}`);
     lines.push(`- Unsent messages: ${record.unsentMessageCount}`);
+    lines.push(`- Skipped rows: ${record.skippedRowCount ?? 0}`);
+    lines.push(`- Removed rows: ${record.removedRowCount ?? 0}`);
     lines.push(`- Edited messages: ${record.editedMessageCount}`);
     lines.push(`- Message hashes: ${record.messageHashes.join(', ') || 'none'}`);
     lines.push(`- Message previews: ${record.messagePreviews.join(' | ') || 'none'}`);
+    lines.push(`- Checkpoint outcomes: ${(record.checkpointOutcomes ?? []).map((outcome) => `${outcome.status}:${outcome.rowId}`).join(', ') || 'none'}`);
     lines.push(`- Later inbound transcript: ${record.inboundTranscriptPreviews.join(' | ') || 'none observed'}`);
     lines.push('');
   }
@@ -218,7 +200,9 @@ export function exportEvidenceMarkdown(records: EvidenceRecord[]): string {
 
 function handshakeLine(handshake: HandshakeSummary): string {
   const status = handshake.status === null ? 'status unknown' : `${handshake.status} ${handshake.statusText}`.trim();
-  const protocol = handshake.protocol ? ` protocol=${handshake.protocol}` : '';
-  const extensions = handshake.extensions ? ` extensions=${handshake.extensions}` : '';
+  const subprotocol = observedHandshakeSubprotocol(handshake);
+  const extension = observedHandshakeExtensions(handshake);
+  const protocol = subprotocol ? ` protocol=${subprotocol}` : '';
+  const extensions = extension ? ` extensions=${extension}` : '';
   return `${status}${protocol}${extensions}`;
 }
