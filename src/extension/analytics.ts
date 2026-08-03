@@ -3,8 +3,6 @@ const GA_MEASUREMENT_ID = "G-J2W71P0P6R"; // replace
 const GA_API_SECRET = "lwPUQ3KoQ2mWu51dIuAVww"; // replace or leave blank if you will proxy
 const MEASUREMENT_ENDPOINT = `https://www.google-analytics.com/mp/collect?measurement_id=${GA_MEASUREMENT_ID}&api_secret=${GA_API_SECRET}`;
 
-import { v4 as uuidv4 } from "uuid"; // or your small uuid generator
-
 type AnalyticsEvent = {
   name: string;
   params?: Record<string, any>;
@@ -18,10 +16,18 @@ const SESSION_TS_KEY = "analytics_session_ts";
 const SESSION_ROTATE_MS = 30 * 60 * 1000; // 30 minutes
 const DEFAULT_ENGAGEMENT_MS = 100; // minimal >0 so GA treats it as engagement
 
+// Use crypto.randomUUID() strictly. Chrome MV3 service workers support this API.
+function generateUuid(): string {
+  if (typeof crypto !== "undefined" && typeof (crypto as any).randomUUID === "function") {
+    return (crypto as any).randomUUID();
+  }
+  throw new Error("crypto.randomUUID is not available in this runtime. Ensure you're running in a modern environment (Chrome MV3 service workers support this API).");
+}
+
 async function getClientId(): Promise<string> {
   const res = await chrome.storage.local.get(CLIENT_ID_KEY);
   if (res && res[CLIENT_ID_KEY]) return res[CLIENT_ID_KEY];
-  const id = uuidv4();
+  const id = generateUuid();
   await chrome.storage.local.set({ [CLIENT_ID_KEY]: id });
   return id;
 }
@@ -41,7 +47,7 @@ async function getSessionId(): Promise<string> {
       return res[SESSION_ID_KEY];
     }
   }
-  const sessionId = uuidv4();
+  const sessionId = generateUuid();
   await chrome.storage.local.set({ [SESSION_ID_KEY]: sessionId, [SESSION_TS_KEY]: now });
   return sessionId;
 }
