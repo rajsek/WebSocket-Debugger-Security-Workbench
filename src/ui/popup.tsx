@@ -3,63 +3,8 @@ import { createRoot } from 'react-dom/client';
 import { Globe2, PanelRightOpen, PictureInPicture2 } from 'lucide-react';
 import { getActiveTabContext, injectOverlay, injectPageOverlay, openWorkbenchSidePanel } from '../extension/chromeAdapter';
 import './styles.css';
-import { recordUseOccurrence, shouldShowPrompt, notePromptShown, setDontAskAgain } from '../extension/feedbackPrompt';
-
-function FeedbackPromptModal({ onClose }: { onClose: () => void }) {
-  const storeUrl = `https://chromewebstore.google.com/detail/websocket-debugger-+-secu/nlmbgbnhoampplflhohbionappfpapaa`;
-
-  async function sendTelemetry(response: string) {
-    try {
-      chrome.runtime.sendMessage({ action: 'trackFeatureUse', featureName: 'feedback_prompt_response', extra: { choice: response } });
-    } catch (e) {}
-  }
-
-  async function handleRateNow() {
-    await sendTelemetry('rate');
-    await notePromptShown();
-    await setDontAskAgain();
-    chrome.tabs.create({ url: storeUrl });
-    onClose();
-  }
-
-  async function handleFeedback() {
-    await sendTelemetry('feedback');
-    await notePromptShown();
-    await setDontAskAgain();
-    chrome.tabs.create({ url: 'https://github.com/rajsek/WebSocket-Debugger-Security-Workbench/issues/new' });
-    onClose();
-  }
-
-  async function handleLater() {
-    await sendTelemetry('later');
-    await notePromptShown();
-    onClose();
-  }
-
-  async function handleNever() {
-    await sendTelemetry('never');
-    await setDontAskAgain();
-    await notePromptShown();
-    onClose();
-  }
-
-  return (
-    <div className="feedback-modal" style={{ position: 'fixed', bottom: 12, left: 12, right: 12, background: '#fff', border: '1px solid #e6e6e6', padding: 12, borderRadius: 8, boxShadow: '0 4px 16px rgba(0,0,0,0.08)' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <div>
-          <strong>Help improve WebSocket Workbench</strong>
-          <div style={{ fontSize: 13, color: '#555' }}>Would you be willing to rate the extension or share feedback? We'll only ask a couple times.</div>
-        </div>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <button onClick={handleRateNow} className="btn">Rate</button>
-          <button onClick={handleFeedback} className="btn" style={{ background: '#6c757d' }}>Feedback</button>
-          <button onClick={handleLater} className="btn" style={{ background: '#e2e6ea', color: '#000' }}>Later</button>
-          <button onClick={handleNever} className="btn" style={{ background: '#fff', border: '1px solid #ddd' }}>Don't ask</button>
-        </div>
-      </div>
-    </div>
-  );
-}
+import { recordUseOccurrence, shouldShowPrompt } from '../extension/feedbackPrompt';
+import { FeedbackPrompt } from './FeedbackPrompt';
 
 function Launcher() {
   const [error, setError] = useState<string | null>(null);
@@ -144,7 +89,7 @@ function Launcher() {
       </button>
       {error ? <p className="error-line">{error}</p> : null}
 
-      {showPrompt ? <FeedbackPromptModal onClose={() => setShowPrompt(false)} /> : null}
+      {showPrompt ? <FeedbackPrompt onClose={() => setShowPrompt(false)} /> : null}
     </main>
   );
 }
