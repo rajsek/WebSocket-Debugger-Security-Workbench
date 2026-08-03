@@ -1515,6 +1515,44 @@ code {
   width: 100%;
 }
 
+.feedback-prompt {
+  background: #111827;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+}
+
+.feedback-prompt-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.feedback-prompt-copy strong {
+  color: #f8fafc;
+  font-size: 13px;
+}
+
+.feedback-prompt-copy p {
+  color: #cbd5e1;
+  font-size: 12px;
+  line-height: 1.4;
+  margin: 0;
+}
+
+.feedback-prompt-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.launcher .feedback-prompt-actions button {
+  flex: 1 1 104px;
+  justify-content: center;
+  width: auto;
+}
+
 @media (max-width: 760px) {
   .top-strip,
   .frame-strip,
