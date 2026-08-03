@@ -1,10 +1,10 @@
 import { setUninstallTrackingUrl, trackFeatureUse, trackPopupOpen, trackPopupClose } from "./analytics";
 
-// Set uninstall URL on install. Replace the URL below with your serverless proxy or a survey page.
+// Set uninstall URL on install. Using GitHub Pages uninstall feedback page.
 chrome.runtime.onInstalled.addListener(async () => {
   try {
-    await setUninstallTrackingUrl("https://your-server.example/uninstall");
-    console.log("Uninstall tracking URL set");
+    await setUninstallTrackingUrl("https://rajsek.github.io/WebSocket-Debugger-Security-Workbench/uninstall.html");
+    console.log("Uninstall tracking URL set to GitHub Pages uninstall page");
   } catch (e) {
     console.warn("Failed to set uninstall URL", e);
   }

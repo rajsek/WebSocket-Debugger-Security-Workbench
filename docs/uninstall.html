@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>WebSocket Workbench — Uninstall Feedback</title>
+    <style>
+      body { font-family: system-ui, -apple-system, 'Segoe UI', Roboto, Arial; margin: 24px; color: #111; }
+      .card { max-width: 720px; margin: 0 auto; padding: 20px; border: 1px solid #e6e6e6; border-radius: 8px; }
+      h1 { margin-top: 0; }
+      .btn { display: inline-block; padding: 8px 12px; background:#0366d6; color:white; text-decoration:none; border-radius:6px; }
+      .muted { color:#666; font-size:0.95rem; }
+    </style>
+  </head>
+  <body>
+    <main class="card">
+      <h1>Thanks for trying WebSocket Workbench</h1>
+      <p class="muted">This page may have opened because you uninstalled the extension. If you'd like to tell us why, you can send anonymous feedback or file an issue on GitHub.</p>
+
+      <p>
+        <a id="issueLink" class="btn" href="https://github.com/rajsek/WebSocket-Debugger-Security-Workbench/issues/new?title=Extension%20Uninstall%20Feedback">Give anonymous feedback (GitHub issue)</a>
+        <a id="privacyLink" style="margin-left:12px;" href="/PRIVACY.md">Privacy policy</a>
+      </p>
+
+      <hr />
+      <p class="muted">This page records a single anonymous event to Google Analytics (Measurement ID configured in this repo) so the developer can measure uninstall counts. No personal data is collected by default. If you prefer not to send any telemetry, do not submit the feedback link.</p>
+    </main>
+
+    <!-- Google Analytics (gtag.js) - Measurement ID is the extension's GA_MEASUREMENT_ID -->
+    <script async src="https://www.googletagmanager.com/gtag/js?id=G-J2W71P0P6R"></script>
+    <script>
+      window.dataLayer = window.dataLayer || [];
+      function gtag(){dataLayer.push(arguments);} 
+      gtag('js', new Date());
+      gtag('config', 'G-J2W71P0P6R');
+
+      // Read client_id from the query string (set by the extension uninstall URL)
+      (function(){
+        try {
+          const params = new URLSearchParams(window.location.search);
+          const clientId = params.get('client_id');
+          if (clientId) {
+            // Send an event to GA with the client_id as a parameter (pseudonymous)
+            gtag('event', 'extension_uninstall', { client_id: clientId });
+
+            // Also add the client id to the prefilled new-issue link so users can optionally include it
+            const issue = document.getElementById('issueLink');
+            if (issue && issue instanceof HTMLAnchorElement) {
+              const url = new URL(issue.href);
+              const body = `Client ID: ${clientId}\n\nPlease tell us why you uninstalled.`;
+              url.searchParams.set('body', body);
+              issue.href = url.toString();
+            }
+          }
+        } catch (e) {
+          // do nothing
+        }
+      })();
+    </script>
+  </body>
+</html>
