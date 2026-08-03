@@ -6,7 +6,7 @@ import './styles.css';
 import { recordUseOccurrence, shouldShowPrompt, notePromptShown, setDontAskAgain } from '../extension/feedbackPrompt';
 
 function FeedbackPromptModal({ onClose }: { onClose: () => void }) {
-  const storeUrl = `https://chrome.google.com/webstore/detail/YOUR_EXTENSION_ID`;
+  const storeUrl = `https://chromewebstore.google.com/detail/websocket-debugger-+-secu/nlmbgbnhoampplflhohbionappfpapaa`;
 
   async function sendTelemetry(response: string) {
     try {
