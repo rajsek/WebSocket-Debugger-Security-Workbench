@@ -1,13 +1,22 @@
 import { setUninstallTrackingUrl, trackFeatureUse, trackPopupOpen, trackPopupClose } from "./analytics";
 
-// Set uninstall URL on install. Using GitHub Pages uninstall feedback page.
-chrome.runtime.onInstalled.addListener(async () => {
+// The deployed GitHub Pages site serves the feedback page from this path.
+const UNINSTALL_FEEDBACK_URL = 'https://rajsek.github.io/WebSocket-Debugger-Security-Workbench/docs/uninstall.html';
+
+async function configureUninstallFeedback(): Promise<void> {
   try {
-    await setUninstallTrackingUrl("https://rajsek.github.io/WebSocket-Debugger-Security-Workbench/docs/uninstall.html");
-    console.log("Uninstall tracking URL set to GitHub Pages uninstall page");
-  } catch (e) {
-    console.warn("Failed to set uninstall URL", e);
+    await setUninstallTrackingUrl(UNINSTALL_FEEDBACK_URL);
+    console.info('[ws-workbench] uninstall feedback URL configured');
+  } catch (error) {
+    console.warn('[ws-workbench] failed to configure uninstall feedback URL', error);
   }
+}
+
+// The service worker can start long after installation. Configure at startup so
+// existing installations gain the uninstall path after an extension reload too.
+void configureUninstallFeedback();
+chrome.runtime.onInstalled.addListener(() => {
+  void configureUninstallFeedback();
 });
 
 // Message-based bridge so UI pages (popup/options) can ask the background to record events.
