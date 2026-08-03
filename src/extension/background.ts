@@ -1,3 +1,4 @@
+import './background-analytics-bridge';
 import { openWorkbenchSidePanel } from './chromeAdapter';
 import { parseRuntimeCommand } from '../domain/contracts';
 import type { RuntimeEvent } from '../domain/types';
