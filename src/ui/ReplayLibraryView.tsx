@@ -213,6 +213,7 @@ export function ReplayQueuePanel(props: {
             role: item.role,
             status: item.status,
           }))}
+          showStatus
           ariaLabel="Imported transcript rows"
           emptyText="No imported transcript rows."
           renderActions={(row) => {

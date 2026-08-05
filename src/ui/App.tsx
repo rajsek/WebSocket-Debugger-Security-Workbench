@@ -1,10 +1,14 @@
 import {
   Activity,
   Bug,
+  ChevronDown,
   Copy,
+  Cpu,
   Eraser,
   FileText,
   FlaskConical,
+  Globe,
+  Link as LinkIcon,
   PictureInPicture2,
   Plug,
   RefreshCw,
@@ -803,81 +807,87 @@ export function App({ surface, loadTabContext, subscribeTabContext, transport = 
   return (
     <main className={`app-shell surface-${surface}`}>
       <section className="top-strip" aria-label="Target context">
-        <div className="target-block" title={state.target.tabOrigin}>
-          <span className="label">Origin</span>
-          <strong className="origin-value">
-            <span className={`origin-dot origin-${state.status}`} aria-hidden="true" />
-            {compactOrigin(state.target.tabOrigin)}
-          </strong>
-        </div>
-
-        <label className="url-field">
-          <span className="label">Socket URL</span>
+        <label className="url-field" title="Socket URL">
+          <div className="field-icon-label">
+            <LinkIcon size={14} />
+            <span className="label sr-only">Socket URL</span>
+          </div>
           <input value={state.target.socketUrl} onChange={(event) => dispatch({ type: 'set-target-url', url: event.target.value })} placeholder="wss://example.com/socket" />
         </label>
 
-        <label className="subprotocol-field">
-          <span className="label">Subprotocol</span>
+        <label className="subprotocol-field" title="Subprotocol (Sec-WebSocket-Protocol)">
+          <div className="field-icon-label">
+            <Globe size={14} />
+            <span className="label sr-only">Subprotocol</span>
+          </div>
           <input
             aria-label="Subprotocol"
             value={state.target.subprotocol}
             disabled={socketIsActive}
             onChange={(event) => dispatch({ type: 'set-target-subprotocol', subprotocol: event.target.value })}
-            placeholder="optional"
+            placeholder="Subprotocol"
           />
         </label>
 
-        <label className="test-endpoint-field">
-          <span className="label">Test</span>
-          <select
-            aria-label="Test endpoint"
-            value={selectedTestEndpointUrl}
-            disabled={socketIsActive}
-            title={selectedTestEndpoint ? `${selectedTestEndpoint.label}: ${selectedTestEndpoint.url}` : 'Custom Socket URL'}
-            onChange={(event) => {
-              if (event.target.value) dispatch({ type: 'set-target-url', url: event.target.value });
-            }}
-          >
-            <option value="">Custom</option>
-            {testEndpointPresets.map((preset) => (
-              <option key={preset.url} value={preset.url}>
-                {preset.shortLabel}
-              </option>
-            ))}
-          </select>
+        <label className="test-endpoint-field" title="Test Endpoints">
+          <div className="field-icon-label">
+            <FlaskConical size={14} />
+            <span className="label sr-only">Test</span>
+          </div>
+          <div className="select-wrapper">
+            <select
+              aria-label="Test endpoint"
+              value={selectedTestEndpointUrl}
+              disabled={socketIsActive}
+              onChange={(event) => {
+                if (event.target.value) dispatch({ type: 'set-target-url', url: event.target.value });
+              }}
+            >
+              <option value="">Custom</option>
+              {testEndpointPresets.map((preset) => (
+                <option key={preset.url} value={preset.url}>
+                  {preset.shortLabel}
+                </option>
+              ))}
+            </select>
+            <ChevronDown size={12} className="select-arrow" />
+          </div>
         </label>
 
-        <label className="engine-field">
-          <span className="label">Engine</span>
-          <select
-            value={state.target.engine}
-            disabled={socketIsActive}
-            onChange={(event) => dispatch({ type: 'set-engine', engine: event.target.value as 'extension' | 'page' })}
-          >
-            <option value="extension">Extension</option>
-            <option value="page">Page</option>
-          </select>
+        <label className="engine-field" title="WebSocket Engine">
+          <div className="field-icon-label">
+            <Cpu size={14} />
+            <span className="label sr-only">Engine</span>
+          </div>
+          <div className="select-wrapper">
+            <select
+              value={state.target.engine}
+              disabled={socketIsActive}
+              onChange={(event) => dispatch({ type: 'set-engine', engine: event.target.value as 'extension' | 'page' })}
+            >
+              <option value="extension">Extension</option>
+              <option value="page">Page</option>
+            </select>
+            <ChevronDown size={12} className="select-arrow" />
+          </div>
         </label>
 
         {showPageCspBypass ? (
-          <div className="csp-bypass-field">
-            <span className="label">Page CSP</span>
+          <div className="csp-bypass-field" title="Page CSP Bypass">
             <button
               type="button"
               className={state.target.pageCspBypassEnabled ? 'csp-bypass-toggle active' : 'csp-bypass-toggle'}
               onClick={handlePageCspBypassToggle}
               disabled={socketIsActive || state.target.tabId === null}
-              title="Use Chrome debugger Page.setBypassCSP for this tab"
               aria-label={state.target.pageCspBypassEnabled ? 'Disable page CSP bypass' : 'Enable page CSP bypass'}
             >
               <ShieldAlert size={14} />
-              {state.target.pageCspBypassEnabled ? 'On' : 'Bypass'}
+              <span>{state.target.pageCspBypassEnabled ? 'On' : 'Bypass'}</span>
             </button>
           </div>
         ) : null}
 
-        <div className="context-field">
-          <span className="label">Context</span>
+        <div className="context-field" title="Transport Context">
           <button
             type="button"
             className={transportContextOpen ? 'context-toggle active' : 'context-toggle'}
@@ -885,7 +895,7 @@ export function App({ surface, loadTabContext, subscribeTabContext, transport = 
             aria-expanded={transportContextOpen}
             aria-controls="transport-context-panel"
           >
-            <FileText size={14} /> Context
+            <FileText size={14} /> <span>Context</span>
           </button>
         </div>
 
@@ -893,7 +903,7 @@ export function App({ surface, loadTabContext, subscribeTabContext, transport = 
           <div className="connection-controls">
             <button type="button" className={`socket-toggle ${socketIsActive ? 'danger' : 'primary'}`} onClick={socketIsActive ? stop : connect} title={socketIsActive ? 'Stop' : 'Connect'} aria-label={socketIsActive ? 'Stop WebSocket' : 'Connect WebSocket'}>
               {socketIsActive ? <Square size={15} /> : <Plug size={15} />}
-              {socketIsActive ? 'Stop' : 'Connect'}
+              <span>{socketIsActive ? 'Stop' : 'Connect'}</span>
             </button>
             <ConnectionStatusIcon status={state.status} />
           </div>

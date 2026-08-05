@@ -100,14 +100,18 @@ export function DiscoverView(props: {
               </div>
 
               <div className="socket-detail-grid">
-                <span>URL</span>
+                <span className="label">URL</span>
                 <code>{props.selectedSocket.url}</code>
-                <span>Last activity</span>
+                <span className="label">Activity</span>
                 <span>{formatTimestamp(props.selectedSocket.lastActivityAt)}</span>
-                <span>Frames</span>
-                <span>{props.selectedSocket.frameCounts.outbound} outbound / {props.selectedSocket.frameCounts.inbound} inbound</span>
-                <span>Error</span>
-                <span>{props.selectedSocket.error ?? 'none'}</span>
+                <span className="label">Frames</span>
+                <span>{props.selectedSocket.frameCounts.outbound} ↑ / {props.selectedSocket.frameCounts.inbound} ↓</span>
+                {props.selectedSocket.error && (
+                  <>
+                    <span className="label">Error</span>
+                    <span className="error-text">{props.selectedSocket.error}</span>
+                  </>
+                )}
               </div>
 
               <section className="handshake-panel" aria-label="Handshake summary">
@@ -118,15 +122,15 @@ export function DiscoverView(props: {
                 </div>
                 {props.selectedSocket.handshake.observed ? (
                   <div className="handshake-grid">
-                    <span>Status</span>
+                    <span className="label">Status</span>
                     <span>{props.selectedSocket.handshake.status ?? 'unknown'} {props.selectedSocket.handshake.statusText}</span>
-                    <span>Protocol</span>
-                    <span>{observedHandshakeSubprotocol(props.selectedSocket.handshake) || 'none observed'}</span>
-                    <span>Extensions</span>
+                    <span className="label">Protocol</span>
+                    <span className="protocol-value">{observedHandshakeSubprotocol(props.selectedSocket.handshake) || 'none observed'}</span>
+                    <span className="label">Extensions</span>
                     <span>{observedHandshakeExtensions(props.selectedSocket.handshake) || 'none observed'}</span>
-                    <span>Request headers</span>
+                    <span className="label">Request</span>
                     <HeaderList headers={props.selectedSocket.handshake.requestHeaders} />
-                    <span>Response headers</span>
+                    <span className="label">Response</span>
                     <HeaderList headers={props.selectedSocket.handshake.responseHeaders} />
                   </div>
                 ) : (

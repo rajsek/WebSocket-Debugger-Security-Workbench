@@ -20,6 +20,7 @@ export function FrameStreamTable(props: {
   emptyText: string;
   onSelect?: (rowId: string) => void;
   renderActions?: (row: FrameStreamTableRow) => ReactNode;
+  showStatus?: boolean;
 }) {
   return (
     <>
@@ -27,7 +28,6 @@ export function FrameStreamTable(props: {
         <span>Dir</span>
         <span>Time</span>
         <span>Length</span>
-        <span>Wire</span>
         <span>Data Preview</span>
         {props.renderActions ? <span>Actions</span> : null}
       </div>
@@ -39,11 +39,11 @@ export function FrameStreamTable(props: {
             <li key={row.id}>
               {props.onSelect ? (
                 <button type="button" className={row.selected ? 'selected frame-row' : 'frame-row'} onClick={() => props.onSelect?.(row.id)}>
-                  <FrameRowCells row={row} />
+                  <FrameRowCells row={row} showStatus={props.showStatus} />
                 </button>
               ) : (
                 <div className={row.selected ? 'selected frame-row transcript-frame-row' : 'frame-row transcript-frame-row'}>
-                  <FrameRowCells row={row} />
+                  <FrameRowCells row={row} showStatus={props.showStatus} />
                   {props.renderActions ? <div className="frame-row-actions">{props.renderActions(row)}</div> : null}
                 </div>
               )}
@@ -71,14 +71,18 @@ export function formatFrameTime(timestamp: string): string {
   return `${date.toTimeString().slice(0, 8)}.${ms}`;
 }
 
-function FrameRowCells(props: { row: FrameStreamTableRow }) {
+function FrameRowCells(props: { row: FrameStreamTableRow; showStatus?: boolean }) {
   return (
     <>
       <DirectionMarker direction={props.row.direction} />
       <time className="frame-time">{formatFrameTime(props.row.timestamp)}</time>
       <span className="frame-size">{props.row.payloadLength} B</span>
-      <span className={`frame-wire ${props.row.payloadKind}`}>{props.row.status ?? props.row.payloadKind}</span>
-      <span className="frame-body">{props.row.body}</span>
+      <span className="frame-body">
+        {props.showStatus && props.row.status ? (
+          <span className={`status-pill status-${props.row.status}`}>{props.row.status}</span>
+        ) : null}
+        {props.row.body}
+      </span>
     </>
   );
 }
